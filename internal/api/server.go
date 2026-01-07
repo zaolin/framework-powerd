@@ -112,5 +112,6 @@ func (s *Server) HandleStatus(w http.ResponseWriter, r *http.Request) {
 		"hdmi_connected": connected,
 		"mode":           mode,
 	}
+	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(status)
 }
