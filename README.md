@@ -2,6 +2,9 @@
 
 A Go daemon to automatically manage power profiles on the Framework Laptop (and others) based on HDMI connectivity.
 
+> [!IMPORTANT]
+> This daemon is designed for [**Framework Desktop**](https://github.com/zaolin/framework-desktop) usage and has been explicitly tested on [**CachyOS**](https://cachyos.org). Use on other distributions or hardware configurations may require adjustments.
+
 ## Features
 
 - **Automated Power Management**: Switches to "Performance" when HDMI is connected and "Powersave" when disconnected.
