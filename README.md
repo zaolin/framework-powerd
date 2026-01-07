@@ -10,6 +10,64 @@ A Go daemon to automatically manage power profiles on the Framework Laptop (and 
 - **JWT Authentication**: Secure API access with JSON Web Tokens.
 - **Systemd Integration**: Runs effectively as a background service.
 
+## Architecture & Flow
+
+The daemon operates by listening to two main sources of input: Kernel Udev events (for automatic HDMI detection) and HTTP API requests (for manual control).
+
+```mermaid
+graph TD
+    User[User / Home Assistant]
+    Kernel[Linux Kernel]
+    
+    box "Internal" #f9f9f9
+        Daemon[Framework Power Daemon]
+        UdevMon[Udev Monitor]
+        APIServer[API Server]
+        Manager[Power Manager]
+    end
+    
+    box "System Tools" #ececec
+        PPC[powerprofilesctl]
+        SCX[scxctl]
+        PT[powertop]
+        Sysfs[Sysfs /sys]
+    end
+
+    User -- "POST /mode (JWT)" --> APIServer
+    Kernel -- "calpha (DRM Change)" --> UdevMon
+    
+    APIServer --> Manager
+    UdevMon --> Manager
+    
+    Manager --> Logic{Auto Detect?}
+    Logic -- Yes (HDMI Plugged) --> Perf[Performance Mode]
+    Logic -- Yes (HDMI Unplugged) --> Save[Powersave Mode]
+    Logic -- No (Manual) --> Manual[User Selected Mode]
+    
+    Perf & Manual --> ApplyPerf
+    Save --> ApplySave
+
+    subgraph ApplyPerf [Apply Performance]
+        direction TB
+        P1[Set 'balanced'] --> PPC
+        P2[Set 'gaming'] --> SCX
+        P3[Disable Power Save] --> Sysfs
+    end
+    
+    subgraph ApplySave [Apply Powersave]
+        direction TB
+        S1[Set 'power-saver'] --> PPC
+        S2[Set 'powersave'] --> SCX
+        S3[Auto-Tune] --> PT
+        S4[Enable ASPM/Power Save] --> Sysfs
+    end
+```
+
+### How it works
+1.  **Monitoring**: The daemon opens a Netlink socket to listen for kernel Udev events. When a DRM (Display) change is detected, it triggers the auto-detection logic.
+2.  **API**: It runs an HTTP server to accept manual mode overrides or status checks.
+3.  **Actions**: Based on the determined mode, it executes external tools (`powerprofilesctl`, `powertop`, etc.) and writes to `/sys` files to optimize the system.
+
 ## Prerequisites
 
 The daemon relies on the following tools:
@@ -105,12 +163,17 @@ curl -H "Authorization: Bearer $TOKEN" http://localhost:8080/status
 
 ## Configuration
 
-Configure port and address via CLI flags:
+You can configure the listening address and port using CLI flags with the `serve` command.
+
+- `--address`: The IP address to listen on (default: `localhost`). Use `0.0.0.0` to listen on all interfaces.
+- `--port`: The port to listen on (default: `8080`).
+
+Example:
 ```bash
 /usr/local/bin/framework-powerd serve --address=0.0.0.0 --port=9090
 ```
 
-Default is `localhost:8080`.
+> **Note**: If you change the port or address, remember to update your API calls (e.g., `curl`) and Home Assistant configuration accordingly.
 
 ## Home Assistant Integration
 
@@ -130,18 +193,10 @@ This project includes a custom component for Home Assistant.
     - Click **Download**.
     - Restart Home Assistant.
 
-### Manual Installation
-
-1.  **Copy Component**:
-    Copy the `custom_components/framework_powerd` directory to your Home Assistant's `custom_components` directory.
-    ```bash
-    cp -r custom_components/framework_powerd /path/to/your/ha/custom_components/
-    ```
-
-2.  **Restart Home Assistant**:
+3.  **Restart Home Assistant**:
     Restart HA to load the new component.
 
-3.  **Add Integration**:
+4.  **Add Integration**:
     - Go to **Settings > Devices & Services**.
     - Click **Add Integration**.
     - Search for **Framework Power Daemon**.
