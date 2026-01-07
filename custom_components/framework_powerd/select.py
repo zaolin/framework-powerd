@@ -1,29 +1,24 @@
 """Platform for select integration."""
 from homeassistant.components.select import SelectEntity
-from homeassistant.config_entries import ConfigEntry
-from homeassistant.core import HomeAssistant
-from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
+from .const import DOMAIN, CONF_CUSTOM_NAME
 
-from .const import DOMAIN
-
-async def async_setup_entry(
-    hass: HomeAssistant,
-    entry: ConfigEntry,
-    async_add_entities: AddEntitiesCallback,
-) -> None:
+async def async_setup_entry(hass, entry, async_add_entities):
     """Set up the select platform."""
     coordinator = hass.data[DOMAIN][entry.entry_id]
-    async_add_entities([FrameworkPowerSelect(coordinator)])
+    async_add_entities([
+        FrameworkPowerSelect(coordinator, entry.entry_id)
+    ])
 
 class FrameworkPowerSelect(CoordinatorEntity, SelectEntity):
-    """Representation of the Power Mode Select."""
+    """Select entity for Power Mode."""
 
-    def __init__(self, coordinator):
-        """Initialize the select."""
+    def __init__(self, coordinator, entry_id):
+        """Initialize the select entity."""
         super().__init__(coordinator)
+        self._attr_unique_id = f"{entry_id}_power_select"
         self._attr_name = "Framework Power Control"
-        self._attr_unique_id = f"{DOMAIN}_control"
+        self._attr_icon = "mdi:speedometer"
         self._attr_options = ["performance", "powersave", "auto"]
 
     @property
@@ -34,7 +29,11 @@ class FrameworkPowerSelect(CoordinatorEntity, SelectEntity):
     @property
     def extra_state_attributes(self):
         """Return the state attributes."""
-        custom_name = self.coordinator.config_entry.options.get("custom_name", "Framework Power")
+        # Fallback to data if options not set
+        custom_name = self.coordinator.config_entry.options.get(
+            CONF_CUSTOM_NAME, 
+            self.coordinator.config_entry.data.get(CONF_CUSTOM_NAME, "Framework Power")
+        )
         return {
             "branding_name": custom_name
         }

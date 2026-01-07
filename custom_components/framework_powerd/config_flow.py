@@ -46,7 +46,7 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         if user_input is not None:
             try:
                 info = await validate_input(self.hass, user_input)
-                # Use custom name from input or default from validate_input
+                # Use custom name from input or default
                 title = user_input.get(CONF_CUSTOM_NAME, info.get("title", "Framework Power"))
                 return self.async_create_entry(title=title, data=user_input)
             except CannotConnect:
@@ -79,12 +79,18 @@ class OptionsFlowHandler(config_entries.OptionsFlow):
         if user_input is not None:
              return self.async_create_entry(title="", data=user_input)
 
+        # Get current value from options, fallback to data, finally default
+        current_name = self.config_entry.options.get(
+            CONF_CUSTOM_NAME, 
+            self.config_entry.data.get(CONF_CUSTOM_NAME, "Framework Power")
+        )
+
         return self.async_show_form(
             step_id="init",
             data_schema=vol.Schema({
                 vol.Optional(
                     CONF_CUSTOM_NAME,
-                    default=self.config_entry.options.get(CONF_CUSTOM_NAME, "Framework Power"),
+                    default=current_name,
                 ): str,
             }),
         )
