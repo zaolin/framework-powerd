@@ -5,7 +5,7 @@ import voluptuous as vol
 
 from homeassistant import config_entries, core, exceptions
 from homeassistant.const import CONF_HOST, CONF_PORT, CONF_TOKEN
-from .const import DOMAIN, DEFAULT_HOST, DEFAULT_PORT
+from .const import DOMAIN, DEFAULT_HOST, DEFAULT_PORT, CONF_CUSTOM_NAME
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -56,6 +56,34 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
         return self.async_show_form(
             step_id="user", data_schema=DATA_SCHEMA, errors=errors
+        )
+
+    @staticmethod
+    @core.callback
+    def async_get_options_flow(config_entry):
+        """Get the options flow for this handler."""
+        return OptionsFlowHandler(config_entry)
+
+class OptionsFlowHandler(config_entries.OptionsFlow):
+    """Handle options."""
+
+    def __init__(self, config_entry):
+        """Initialize options flow."""
+        self.config_entry = config_entry
+
+    async def async_step_init(self, user_input=None):
+        """Manage the options."""
+        if user_input is not None:
+             return self.async_create_entry(title="", data=user_input)
+
+        return self.async_show_form(
+            step_id="init",
+            data_schema=vol.Schema({
+                vol.Optional(
+                    CONF_CUSTOM_NAME,
+                    default=self.config_entry.options.get(CONF_CUSTOM_NAME, "Framework Power"),
+                ): str,
+            }),
         )
 
 class CannotConnect(exceptions.HomeAssistantError):

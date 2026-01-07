@@ -31,6 +31,14 @@ class FrameworkPowerSelect(CoordinatorEntity, SelectEntity):
         """Return the selected entity option to represent the entity state."""
         return self.coordinator.data.get("mode")
 
+    @property
+    def extra_state_attributes(self):
+        """Return the state attributes."""
+        custom_name = self.coordinator.config_entry.options.get("custom_name", "Framework Power")
+        return {
+            "branding_name": custom_name
+        }
+
     async def async_select_option(self, option: str) -> None:
         """Change the selected option."""
         await self.coordinator.set_mode(option)

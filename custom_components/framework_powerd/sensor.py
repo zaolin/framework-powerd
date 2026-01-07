@@ -34,6 +34,14 @@ class FrameworkPowerModeSensor(CoordinatorEntity, SensorEntity):
         """Return the state of the sensor."""
         return self.coordinator.data.get("mode")
 
+    @property
+    def extra_state_attributes(self):
+        """Return the state attributes."""
+        custom_name = self.coordinator.config_entry.options.get("custom_name", "Framework Power")
+        return {
+            "branding_name": custom_name
+        }
+
 class FrameworkHDMIConnectedSensor(CoordinatorEntity, BinarySensorEntity):
     """Representation of the HDMI Connected Sensor."""
 
