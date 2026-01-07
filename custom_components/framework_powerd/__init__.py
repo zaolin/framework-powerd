@@ -56,6 +56,23 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         StaticPathConfig("/framework_powerd/logo.png", logo_path, False)
     ])
 
+    # Auto-register Lovelace resource
+    try:
+        from homeassistant.components.lovelace import resources
+        resource_collection = resources.ResourceStorageCollection(hass, hass.config)
+        await resource_collection.async_load()
+        
+        resource_url = "/framework_powerd/card.js"
+        # Check if resource already exists
+        if not any(item["url"] == resource_url for item in resource_collection.async_items()):
+            _LOGGER.info("Auto-registering Framework Power Card resource")
+            await resource_collection.async_create_item({
+                "res_type": "module",
+                "url": resource_url,
+            })
+    except Exception as e:
+        _LOGGER.warning(f"Failed to auto-register Lovelace resource: {e}")
+
     return True
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
