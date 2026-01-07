@@ -1,24 +1,24 @@
 class FrameworkPowerCard extends HTMLElement {
-    set hass(hass) {
-        const entityId = this.config.entity;
-        const state = hass.states[entityId];
+  set hass(hass) {
+    const entityId = this.config.entity;
+    const state = hass.states[entityId];
 
-        if (!state) {
-            this.innerHTML = `
+    if (!state) {
+      this.innerHTML = `
         <ha-card header="Framework Power">
           <div class="card-content">
             Entity not found: ${entityId}
           </div>
         </ha-card>
       `;
-            return;
-        }
+      return;
+    }
 
-        const mode = state.state; // 'performance', 'powersave', 'auto'
-        const customName = state.attributes.branding_name || "Framework Power";
+    const mode = state.state; // 'performance', 'powersave', 'auto'
+    const customName = state.attributes.branding_name || "Framework Power";
 
-        // Simple styling
-        const style = `
+    // Simple styling
+    const style = `
       <style>
         ha-card {
           padding: 16px;
@@ -69,26 +69,26 @@ class FrameworkPowerCard extends HTMLElement {
       </style>
     `;
 
-        // Button logic
-        const modes = ['performance', 'auto', 'powersave'];
-        const labels = {
-            'performance': 'Performance',
-            'auto': 'Auto',
-            'powersave': 'Powersave'
-        };
+    // Button logic
+    const modes = ['performance', 'auto', 'powersave'];
+    const labels = {
+      'performance': 'Performance',
+      'auto': 'Auto',
+      'powersave': 'Powersave'
+    };
 
-        let buttonsHtml = '';
-        modes.forEach(m => {
-            const isActive = mode === m ? 'active' : '';
-            buttonsHtml += `<button class="${isActive}" onclick="document.querySelector('framework-power-card').setMode('${m}')">${labels[m]}</button>`;
-        });
+    let buttonsHtml = '';
+    modes.forEach(m => {
+      const isActive = mode === m ? 'active' : '';
+      buttonsHtml += `<button class="${isActive}" onclick="document.querySelector('framework-power-card').setMode('${m}')">${labels[m]}</button>`;
+    });
 
-        this.innerHTML = `
+    this.innerHTML = `
       ${style}
       <ha-card>
         <div class="header">
-          <!-- Logo assumed to be in /local/framework-logo.png -->
-          <img src="/local/framework-logo.png" alt="Logo" onerror="this.style.display='none'">
+          <!-- Logo served by integration -->
+          <img src="/framework_powerd/logo.png" alt="Logo" onerror="this.style.display='none'">
           <span>${customName}</span>
         </div>
         <div class="status">
@@ -100,29 +100,29 @@ class FrameworkPowerCard extends HTMLElement {
       </ha-card>
     `;
 
-        // Store hass and entity for method access
-        this._hass = hass;
-        this._entityId = entityId;
-    }
+    // Store hass and entity for method access
+    this._hass = hass;
+    this._entityId = entityId;
+  }
 
-    setMode(mode) {
-        if (!this._hass) return;
-        this._hass.callService('select', 'select_option', {
-            entity_id: this._entityId,
-            option: mode
-        });
-    }
+  setMode(mode) {
+    if (!this._hass) return;
+    this._hass.callService('select', 'select_option', {
+      entity_id: this._entityId,
+      option: mode
+    });
+  }
 
-    setConfig(config) {
-        if (!config.entity) {
-            throw new Error('Please define an entity (e.g. select.framework_power_control)');
-        }
-        this.config = config;
+  setConfig(config) {
+    if (!config.entity) {
+      throw new Error('Please define an entity (e.g. select.framework_power_control)');
     }
+    this.config = config;
+  }
 
-    getCardSize() {
-        return 3;
-    }
+  getCardSize() {
+    return 3;
+  }
 }
 
 customElements.define('framework-power-card', FrameworkPowerCard);

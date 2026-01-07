@@ -41,8 +41,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     
     # Register custom card
     path = hass.config.path("custom_components/framework_powerd/framework-power-card.js")
+    logo_path = hass.config.path("custom_components/framework_powerd/logo.png")
     await hass.http.async_register_static_paths([
-        StaticPathConfig("/framework_powerd/card.js", path, False)
+        StaticPathConfig("/framework_powerd/card.js", path, False),
+        StaticPathConfig("/framework_powerd/logo.png", logo_path, False)
     ])
 
     return True
