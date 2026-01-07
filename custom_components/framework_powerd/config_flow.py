@@ -16,7 +16,29 @@ DATA_SCHEMA = vol.Schema({
     vol.Optional(CONF_CUSTOM_NAME, default="Framework Power"): str,
 })
 
-# ... (validate_input remains the same)
+async def validate_input(hass: core.HomeAssistant, data):
+    """Validate the user input allows us to connect."""
+    url = f"http://{data[CONF_HOST]}:{data[CONF_PORT]}/status"
+    headers = {}
+    if data.get(CONF_TOKEN):
+        headers["Authorization"] = f"Bearer {data[CONF_TOKEN]}"
+
+    async with aiohttp.ClientSession() as session:
+        try:
+            async with session.get(url, headers=headers, timeout=5) as response:
+                if response.status == 401:
+                    raise InvalidAuth
+                if response.status != 200:
+                    raise CannotConnect
+        except aiohttp.ClientError:
+            raise CannotConnect
+
+    return {"title": "Framework Power"}
+
+class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
+    """Handle a config flow for Framework Power Daemon."""
+
+    VERSION = 1
 
     async def async_step_user(self, user_input=None):
         """Handle the initial step."""
@@ -25,7 +47,7 @@ DATA_SCHEMA = vol.Schema({
             try:
                 info = await validate_input(self.hass, user_input)
                 # Use custom name from input or default from validate_input
-                title = user_input.get(CONF_CUSTOM_NAME, info["title"])
+                title = user_input.get(CONF_CUSTOM_NAME, info.get("title", "Framework Power"))
                 return self.async_create_entry(title=title, data=user_input)
             except CannotConnect:
                 errors["base"] = "cannot_connect"

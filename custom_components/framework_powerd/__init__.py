@@ -40,15 +40,17 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     entry.async_on_unload(entry.add_update_listener(update_listener))
     
-    # Register custom card
+    # Register custom card and logo
     component_dir = os.path.dirname(__file__)
-    path = os.path.join(component_dir, "framework-power-card.js")
+    card_path = os.path.join(component_dir, "framework-power-card.js")
     logo_path = os.path.join(component_dir, "logo.png")
     
-    await hass.http.async_register_static_paths([
-        StaticPathConfig("/framework_powerd/card.js", path, False),
-        StaticPathConfig("/framework_powerd/logo.png", logo_path, False)
-    ])
+    # Register static paths if files exist, to avoid errors
+    if os.path.exists(card_path) and os.path.exists(logo_path):
+        await hass.http.async_register_static_paths([
+            StaticPathConfig("/framework_powerd/card.js", card_path, False),
+            StaticPathConfig("/framework_powerd/logo.png", logo_path, False)
+        ])
 
     return True
 
