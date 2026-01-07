@@ -3,6 +3,7 @@ import logging
 import asyncio
 import async_timeout
 import aiohttp
+import os
 from datetime import timedelta
 from homeassistant.components.http import StaticPathConfig
 
@@ -40,8 +41,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     entry.async_on_unload(entry.add_update_listener(update_listener))
     
     # Register custom card
-    path = hass.config.path("custom_components/framework_powerd/framework-power-card.js")
-    logo_path = hass.config.path("custom_components/framework_powerd/logo.png")
+    component_dir = os.path.dirname(__file__)
+    path = os.path.join(component_dir, "framework-power-card.js")
+    logo_path = os.path.join(component_dir, "logo.png")
+    
     await hass.http.async_register_static_paths([
         StaticPathConfig("/framework_powerd/card.js", path, False),
         StaticPathConfig("/framework_powerd/logo.png", logo_path, False)
