@@ -25,7 +25,7 @@ class FrameworkPowerModeSelect(CoordinatorEntity[FrameworkPowerCoordinator], Sel
 
     _attr_has_entity_name = True
     _attr_name = "Power Mode"
-    _attr_options = ["power-saver", "balanced", "performance"]
+    _attr_options = ["powersave", "auto", "performance"]
 
     def __init__(self, coordinator: FrameworkPowerCoordinator) -> None:
         """Initialize the selector."""
