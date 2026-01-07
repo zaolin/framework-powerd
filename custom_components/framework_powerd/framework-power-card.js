@@ -77,12 +77,6 @@ class FrameworkPowerCard extends HTMLElement {
       'powersave': 'Powersave'
     };
 
-    let buttonsHtml = '';
-    modes.forEach(m => {
-      const isActive = mode === m ? 'active' : '';
-      buttonsHtml += `<button class="${isActive}" onclick="document.querySelector('framework-power-card').setMode('${m}')">${labels[m]}</button>`;
-    });
-
     this.innerHTML = `
       ${style}
       <ha-card>
@@ -95,10 +89,20 @@ class FrameworkPowerCard extends HTMLElement {
           Current Mode: <strong>${mode.charAt(0).toUpperCase() + mode.slice(1)}</strong>
         </div>
         <div class="controls">
-          ${buttonsHtml}
+          ${modes.map(m => {
+      const isActive = mode === m ? 'active' : '';
+      return `<button class="${isActive}" data-mode="${m}">${labels[m]}</button>`;
+    }).join('')}
         </div>
       </ha-card>
     `;
+
+    // Add event listeners preventing scope issues
+    this.querySelectorAll('button').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        this.setMode(e.target.dataset.mode);
+      });
+    });
 
     // Store hass and entity for method access
     this._hass = hass;
