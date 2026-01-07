@@ -1,0 +1,14 @@
+[Unit]
+Description=Framework Power Daemon
+After=network.target
+
+[Service]
+ExecStart=/usr/local/bin/framework-powerd serve --address=localhost --port=8080
+Restart=always
+User=root
+# Adjust if needed
+Environment=PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+# Environment=JWT_SECRET=change_me_to_enable_auth
+
+[Install]
+WantedBy=multi-user.target

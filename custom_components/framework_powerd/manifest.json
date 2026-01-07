@@ -1,0 +1,11 @@
+{
+  "domain": "framework_powerd",
+  "name": "Framework Power Daemon",
+  "codeowners": [],
+  "config_flow": true,
+  "documentation": "https://github.com/yourusername/framework-power",
+  "iot_class": "local_polling",
+  "issue_tracker": "https://github.com/yourusername/framework-power/issues",
+  "requirements": [],
+  "version": "1.0.0"
+}
