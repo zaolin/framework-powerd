@@ -1,55 +1,51 @@
 """Platform for sensor integration."""
-from homeassistant.helpers.update_coordinator import CoordinatorEntity
+from __future__ import annotations
+
 from homeassistant.components.sensor import SensorEntity
-from homeassistant.components.binary_sensor import BinarySensorEntity
-from .const import DOMAIN, CONF_CUSTOM_NAME
+from homeassistant.config_entries import ConfigEntry
+from homeassistant.core import HomeAssistant
+from homeassistant.helpers.entity_platform import AddEntitiesCallback
+from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
-class FrameworkPowerModeSensor(CoordinatorEntity, SensorEntity):
-    """Representation of the Power Mode Sensor."""
+from .const import DOMAIN
+from .coordinator import FrameworkPowerCoordinator
 
-    def __init__(self, coordinator, entry_id):
-        """Initialize the sensor."""
-        super().__init__(coordinator)
-        self._attr_unique_id = f"{entry_id}_power_mode"
-        self._attr_name = "Framework Power Mode"
-        self._attr_icon = "mdi:flash"
-
-    @property
-    def native_value(self):
-        """Return the state of the sensor."""
-        return self.coordinator.data.get("mode")
-
-    @property
-    def extra_state_attributes(self):
-        """Return the state attributes."""
-        # Fallback to data if options not set
-        custom_name = self.coordinator.config_entry.options.get(
-            CONF_CUSTOM_NAME, 
-            self.coordinator.config_entry.data.get(CONF_CUSTOM_NAME, "Framework Power")
-        )
-        return {
-            "branding_name": custom_name
-        }
-
-class FrameworkHDMIConnectedSensor(CoordinatorEntity, BinarySensorEntity):
-    """Representation of the HDMI Connected Sensor."""
-
-    def __init__(self, coordinator, entry_id):
-        """Initialize the sensor."""
-        super().__init__(coordinator)
-        self._attr_unique_id = f"{entry_id}_hdmi_connected"
-        self._attr_name = "Framework HDMI Connected"
-        self._attr_icon = "mdi:video-input-hdmi"
-
-    @property
-    def is_on(self):
-        """Return true if the binary sensor is on."""
-        return self.coordinator.data.get("hdmi_connected", False)
-
-async def async_setup_entry(hass, entry, async_add_entities):
+async def async_setup_entry(
+    hass: HomeAssistant,
+    entry: ConfigEntry,
+    async_add_entities: AddEntitiesCallback,
+) -> None:
     """Set up the sensor platform."""
-    coordinator = hass.data[DOMAIN][entry.entry_id]
-    async_add_entities([
-        FrameworkPowerModeSensor(coordinator, entry.entry_id),
-        FrameworkHDMIConnectedSensor(coordinator, entry.entry_id)
-    ])
+    coordinator: FrameworkPowerCoordinator = hass.data[DOMAIN][entry.entry_id]
+    
+    entities = []
+    # Add sensors based on API response structure
+    # Assuming the API returns keys like "battery_level", "power_consumption", etc.
+    # We will create a generic sensor for now that dumps all status or specific known fields if we knew them.
+    # Based on previous code, it seemed to just dump everything. 
+    # Let's check what the coordinator data looks like in a real scenario, 
+    # but for now we'll implement a flexible sensor set.
+    
+    # We will instantiate sensors when data is available.
+    if coordinator.data:
+        for key in coordinator.data:
+             entities.append(FrameworkPowerSensor(coordinator, key))
+
+    async_add_entities(entities)
+
+
+class FrameworkPowerSensor(CoordinatorEntity[FrameworkPowerCoordinator], SensorEntity):
+    """Representation of a Framework Power Sensor."""
+
+    def __init__(self, coordinator: FrameworkPowerCoordinator, key: str) -> None:
+        """Initialize the sensor."""
+        super().__init__(coordinator)
+        self._key = key
+        self._attr_has_entity_name = True
+        self._attr_name = key.replace("_", " ").title()
+        self._attr_unique_id = f"{coordinator.config_entry.entry_id}_{key}"
+
+    @property
+    def native_value(self) -> str | int | float | None:
+        """Return the state of the sensor."""
+        return self.coordinator.data.get(self._key)

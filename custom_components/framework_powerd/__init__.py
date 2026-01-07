@@ -1,25 +1,21 @@
 """The Framework Power Daemon integration."""
-import logging
-import asyncio
-import async_timeout
-import aiohttp
+from __future__ import annotations
+
 import os
-from datetime import timedelta
-from homeassistant.components.http import StaticPathConfig
 
 from homeassistant.config_entries import ConfigEntry
+from homeassistant.components.http import StaticPathConfig
 from homeassistant.core import HomeAssistant
-from homeassistant.const import CONF_HOST, CONF_PORT, CONF_TOKEN
-from homeassistant.helpers.update_coordinator import (
-    DataUpdateCoordinator,
-    UpdateFailed,
+
+from .const import (
+    DOMAIN,
+    CONF_HOST,
+    CONF_PORT,
+    CONF_TOKEN,
+    PLATFORMS,
+    LOGGER
 )
-
-from .const import DOMAIN, DEFAULT_SCAN_INTERVAL
-
-_LOGGER = logging.getLogger(__name__)
-
-PLATFORMS = ["sensor", "select"]
+from .coordinator import FrameworkPowerCoordinator
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up Framework Power Daemon from a config entry."""
@@ -47,7 +43,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     logo_path = os.path.join(component_dir, "logo.png")
     
     # Debug logging to verify paths
-    _LOGGER.debug(f"Registering static paths: card={card_path}, logo={logo_path}")
+    LOGGER.debug(f"Registering static paths: card={card_path}, logo={logo_path}")
 
     # Register paths regardless of existence check to ensure HA attempts to serve them
     # and to surface permission errors if any.
@@ -65,13 +61,13 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         resource_url = "/framework_powerd/card.js"
         # Check if resource already exists
         if not any(item["url"] == resource_url for item in resource_collection.async_items()):
-            _LOGGER.info("Auto-registering Framework Power Card resource")
+            LOGGER.info("Auto-registering Framework Power Card resource")
             await resource_collection.async_create_item({
                 "res_type": "module",
                 "url": resource_url,
             })
     except Exception as e:
-        _LOGGER.warning(f"Failed to auto-register Lovelace resource: {e}")
+        LOGGER.warning(f"Failed to auto-register Lovelace resource: {e}")
 
     return True
 
@@ -85,51 +81,3 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 async def update_listener(hass: HomeAssistant, entry: ConfigEntry) -> None:
     """Update listener."""
     await hass.config_entries.async_reload(entry.entry_id)
-
-class FrameworkPowerCoordinator(DataUpdateCoordinator):
-    """Class to manage fetching data from the API."""
-
-    def __init__(self, hass, api_url, token):
-        """Initialize."""
-        self.api_url = api_url
-        self.token = token
-        self.headers = {}
-        if token:
-            self.headers["Authorization"] = f"Bearer {token}"
-
-        super().__init__(
-            hass,
-            _LOGGER,
-            name=DOMAIN,
-            update_interval=timedelta(seconds=DEFAULT_SCAN_INTERVAL),
-        )
-
-    async def _async_update_data(self):
-        """Fetch data from API endpoint."""
-        try:
-            async with async_timeout.timeout(10):
-                async with aiohttp.ClientSession() as session:
-                    async with session.get(
-                        f"{self.api_url}/status", headers=self.headers
-                    ) as response:
-                        if response.status == 401:
-                             raise UpdateFailed("Authentication failed")
-                        response.raise_for_status()
-                        return await response.json()
-        except Exception as err:
-            raise UpdateFailed(f"Error communicating with API: {err}")
-
-    async def set_mode(self, mode):
-        """Set the power mode."""
-        try:
-            async with async_timeout.timeout(10):
-                async with aiohttp.ClientSession() as session:
-                    async with session.post(
-                        f"{self.api_url}/mode",
-                        json={"mode": mode},
-                        headers=self.headers,
-                    ) as response:
-                        response.raise_for_status()
-                        await self.async_request_refresh()
-        except Exception as err:
-            _LOGGER.error("Failed to set mode: %s", err)

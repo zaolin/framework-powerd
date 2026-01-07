@@ -70,11 +70,11 @@ class FrameworkPowerCard extends HTMLElement {
     `;
 
     // Button logic
-    const modes = ['performance', 'auto', 'powersave'];
+    const modes = ['performance', 'balanced', 'power-saver'];
     const labels = {
       'performance': 'Performance',
-      'auto': 'Auto',
-      'powersave': 'Powersave'
+      'balanced': 'Balanced',
+      'power-saver': 'Power Saver'
     };
 
     this.innerHTML = `
