@@ -4,6 +4,7 @@ import asyncio
 import async_timeout
 import aiohttp
 from datetime import timedelta
+from homeassistant.components.http import StaticPathConfig
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
@@ -40,7 +41,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     
     # Register custom card
     path = hass.config.path("custom_components/framework_powerd/framework-power-card.js")
-    hass.http.register_static_path("/framework_powerd/card.js", path)
+    await hass.http.async_register_static_paths([
+        StaticPathConfig("/framework_powerd/card.js", path, False)
+    ])
 
     return True
 
