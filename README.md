@@ -19,14 +19,16 @@ graph TD
     User[User / Home Assistant]
     Kernel[Linux Kernel]
     
-    box "Internal" #f9f9f9
+    subgraph Internal ["Internal Components"]
+        direction TB
         Daemon[Framework Power Daemon]
         UdevMon[Udev Monitor]
         APIServer[API Server]
         Manager[Power Manager]
     end
     
-    box "System Tools" #ececec
+    subgraph Tools ["System Tools"]
+        direction TB
         PPC[powerprofilesctl]
         SCX[scxctl]
         PT[powertop]
