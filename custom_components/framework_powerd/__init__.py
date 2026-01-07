@@ -37,6 +37,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
 
     entry.async_on_unload(entry.add_update_listener(update_listener))
+    
+    # Register custom card
+    path = hass.config.path("custom_components/framework_powerd/framework-power-card.js")
+    hass.http.register_static_path("/framework_powerd/card.js", path)
 
     return True
 

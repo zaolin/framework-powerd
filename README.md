@@ -89,8 +89,8 @@ The daemon relies on the following tools:
 
 1.  **Clone the repository**:
     ```bash
-    git clone https://github.com/yourusername/framework-power.git
-    cd framework-power
+    git clone https://github.com/zaolin/framework-powerd.git
+    cd framework-powerd
     ```
 
 2.  **Build**:
@@ -212,3 +212,24 @@ This project includes a custom component for Home Assistant.
 - **Sensor**: `sensor.framework_power_mode` (Current Mode)
 - **Binary Sensor**: `binary_sensor.framework_hdmi` (HDMI Connected)
 - **Select**: `select.framework_power_control` (Change Mode)
+
+### UI Customization & Lovelace Card
+
+#### 1. Integration Branding
+The integration includes a logo and icon that will automatically appear in your Home Assistant Integrations list.
+
+#### 2. Custom Name
+You can rename the integration display name (e.g., "Main Laptop") by clicking **Configure** on the integration entry in **Settings > Devices & Services**.
+
+#### 3. Custom Lovelace Card
+A custom card is bundled with the integration.
+
+**Usage**:
+1.  After installing via HACS/Manual and restarting, add the resource:
+    - Go to **Settings > Dashboards > three dots > Resources**.
+    - Add Resource: `/framework_powerd/card.js` (JavaScript Module).
+2.  Add the card to your dashboard:
+    ```yaml
+    type: custom:framework-power-card
+    entity: select.framework_power_control
+    ```
