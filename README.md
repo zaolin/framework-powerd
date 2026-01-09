@@ -1,6 +1,6 @@
 # Framework Power Daemon
 
-A Go daemon to automatically manage power profiles on the Framework Laptop (and others) based on HDMI connectivity.
+A Go daemon to automatically manage power profiles on the Framework Desktop based on HDMI connectivity.
 
 > [!IMPORTANT]
 > This daemon is designed for [**Framework Desktop**](https://github.com/zaolin/framework-desktop) usage and has been explicitly tested on [**CachyOS**](https://cachyos.org). Use on other distributions or hardware configurations may require adjustments.
