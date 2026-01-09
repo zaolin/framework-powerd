@@ -1,9 +1,11 @@
 # Framework Power Daemon
 
-A Go daemon to automatically manage power profiles on the Framework Desktop based on HDMI connectivity.
+A Go daemon to automatically manage power profiles on the **Framework Desktop**, specifically tailored for hybrid setups acting as both a **Steam Gaming Console** and an **AI Server**.
 
 > [!IMPORTANT]
-> This daemon is designed for [**Framework Desktop**](https://github.com/zaolin/framework-desktop) usage and has been explicitly tested on [**CachyOS**](https://cachyos.org). Use on other distributions or hardware configurations may require adjustments.
+> This daemon is designed for [**Framework Desktop**](https://frame.work/desktop) usage and has been explicitly tested on [**CachyOS**](https://cachyos.org). It ensures the system runs at peak performance when gaming (Active or Remote Play) and drastically reduces power consumption during idle AI server operation (24/7).
+>
+> **Tip for AI/Ollama Users**: When running local LLMs, using `ollama-vulkan` has been observed to save **~20W/h** compared to `ollama-rocm` on this hardware.
 
 ## Features
 
@@ -97,7 +99,7 @@ The daemon relies on the following tools:
 - `powertop` (Optional): For auto-tuning power parameters.
 - `scxctl` (Optional): For sched-ext scheduler management.
 
-> The original reference shell script is located at `scripts/powermanagement.sh`.
+
 
 ## Installation
 
