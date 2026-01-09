@@ -5,6 +5,9 @@ After=network.target
 [Service]
 ExecStart=/usr/local/bin/framework-powerd serve --address=localhost --port=8080
 Restart=always
+# Root user is required for:
+# 1. Accessing /dev/input/* (Idle Detection)
+# 2. Executing powerprofilesctl/ppd
 User=root
 # Adjust if needed
 Environment=PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin

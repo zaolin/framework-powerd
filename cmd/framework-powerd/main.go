@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"net/http"
@@ -14,6 +15,7 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 
 	"github.com/zaolin/framework-powerd/internal/api"
+	"github.com/zaolin/framework-powerd/internal/detector"
 	"github.com/zaolin/framework-powerd/internal/monitor"
 	"github.com/zaolin/framework-powerd/internal/power"
 )
@@ -101,6 +103,123 @@ func runServer() {
 			}
 		}
 	}()
+
+	// State tracking
+	var isGameRunning bool
+	var isIdle bool
+	var isRemotePlay bool
+
+	// Start Idle Monitor (Raw Input)
+	// Timeout: 5 Minutes
+	idleMon := monitor.NewIdleMonitor(5 * time.Minute)
+
+	idleCtx, idleCancel := context.WithCancel(context.Background())
+	defer idleCancel()
+
+	// Logic handler
+	updatePowerState := func() {
+		// Priority:
+		// 1. Remote Play (Active Streaming) -> Performance (Overrides Idle)
+		// 2. Idle -> Power Saver
+		// 3. Game Running -> Performance
+		// 4. Auto Detect
+
+		if isRemotePlay {
+			log.Println("[PowerLogic] Remote Play Active. Force Performance.")
+			if err := pm.SetPerformance("Remote Play Active"); err != nil {
+				log.Printf("Failed to set performance: %v\n", err)
+			}
+		} else if isIdle {
+			// Idle takes precedence over Game Running (unless Remote Play is active)
+			log.Println("[PowerLogic] System Idle. Force Power Saver.")
+			if err := pm.SetPowersave("System Idle"); err != nil {
+				log.Printf("Failed to set powersave: %v\n", err)
+			}
+		} else if isGameRunning {
+			// Not Idle, Game Running -> Performance
+			log.Println("[PowerLogic] Active & Game Running. Force Performance.")
+			if err := pm.SetPerformance("Game Active"); err != nil {
+				log.Printf("Failed to set performance: %v\n", err)
+			}
+		} else {
+			// Not Idle, No Game -> Auto Detect
+			log.Println("[PowerLogic] Active & No Game. Auto-Detect.")
+			if err := pm.AutoDetect(); err != nil {
+				log.Printf("Failed to auto-detect: %v\n", err)
+			}
+		}
+	}
+
+	go func() {
+		if err := idleMon.Start(idleCtx,
+			func() {
+				isIdle = true
+				updatePowerState()
+			},
+			func() {
+				isIdle = false
+				updatePowerState()
+			},
+		); err != nil {
+			log.Printf("Idle monitor failed: %v\n", err)
+		}
+	}()
+
+	// Start Steam Remote Play Detector
+	rpDet := detector.NewRemotePlayDetector()
+	rpCtx, rpCancel := context.WithCancel(context.Background())
+	defer rpCancel()
+
+	go func() {
+		// This requires Raw Sockets (CAP_NET_RAW or Root)
+		if err := rpDet.Start(rpCtx,
+			func() {
+				isRemotePlay = true
+				updatePowerState()
+			},
+			func() {
+				isRemotePlay = false
+				updatePowerState()
+			},
+		); err != nil {
+			log.Printf("Remote Play detector failed: %v\n", err)
+		}
+	}()
+
+	// Start Steam Game Detector
+	// Poll every 5 seconds
+	steamDet := detector.NewSteamDetector(5 * time.Second)
+
+	// Create a context for the detector
+	detCtx, detCancel := context.WithCancel(context.Background())
+	defer detCancel()
+
+	go steamDet.Start(detCtx,
+		func(pid int) {
+			// On Game Start
+			log.Printf("Steam Game Started (PID: %d).\n", pid)
+			isGameRunning = true
+			if !isIdle {
+				if err := pm.SetPerformance(fmt.Sprintf("Steam Game (PID %d)", pid)); err != nil {
+					log.Printf("Failed to set performance mode: %v\n", err)
+				}
+			} else {
+				log.Println("Steam Game Started but System is Idle. Keeping Power Saver.")
+			}
+		},
+		func() {
+			// On Game Stop
+			log.Println("Steam Game Stopped.")
+			isGameRunning = false
+			// If idle, we stay in powersave (which is consistent).
+			// If active, we revert to auto-detect.
+			if !isIdle {
+				if err := pm.AutoDetect(); err != nil {
+					log.Printf("Failed to revert to auto-detect: %v\n", err)
+				}
+			}
+		},
+	)
 
 	// Start API Server
 	jwtSecret := strings.TrimSpace(CLI.Serve.JWTSecret)

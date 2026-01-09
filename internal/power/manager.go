@@ -68,13 +68,18 @@ func (pm *PowerManager) IsHDMIConnected() (bool, error) {
 // SetPerformance enables performance mode
 func (pm *PowerManager) SetPerformance(reason string) error {
 	pm.mu.Lock()
+	if pm.currentMode == "performance" {
+		pm.mu.Unlock()
+		log.Printf("[MODE IGNORED] Already in Performance Mode (%s)\n", reason)
+		return nil
+	}
 	pm.currentMode = "performance"
 	pm.mu.Unlock()
 
 	log.Printf("[MODE SET] Switching to Performance Mode (%s)\n", reason)
 
-	// 1. Power Profile -> Balanced
-	if err := runCommand("powerprofilesctl", "set", "balanced"); err != nil {
+	// 1. Power Profile -> Performance
+	if err := runCommand("powerprofilesctl", "set", "performance"); err != nil {
 		log.Printf("Error setting power profile: %v\n", err)
 	}
 
@@ -88,7 +93,10 @@ func (pm *PowerManager) SetPerformance(reason string) error {
 		}
 	}
 
-	// 4. Disable Latency (Reverting USB & Audio Latency)
+	// 4. PCIe ASPM -> Aggressive
+	setASPM("performance")
+
+	// 5. Disable Latency (Reverting USB & Audio Latency)
 	pm.disableLatency()
 
 	return nil
@@ -97,6 +105,11 @@ func (pm *PowerManager) SetPerformance(reason string) error {
 // SetPowersave enables power save mode
 func (pm *PowerManager) SetPowersave(reason string) error {
 	pm.mu.Lock()
+	if pm.currentMode == "powersave" {
+		pm.mu.Unlock()
+		log.Printf("[MODE IGNORED] Already in Power Saver Mode (%s)\n", reason)
+		return nil
+	}
 	pm.currentMode = "powersave"
 	pm.mu.Unlock()
 

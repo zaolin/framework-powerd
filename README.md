@@ -8,6 +8,9 @@ A Go daemon to automatically manage power profiles on the Framework Laptop (and 
 ## Features
 
 - **Automated Power Management**: Switches to "Performance" when HDMI is connected and "Powersave" when disconnected.
+- **Steam Game Detection**: Automatically switches to "Performance" when a Steam game is running (scanning `/proc` for `SteamAppId`).
+- **Steam Remote Play Detection**: Detects active Remote Play streaming sessions by monitoring `/proc/bus/input/devices` for virtual input devices (controllers with empty physical addresses) and forces "Performance" mode.
+- **Idle Detection**: Monitors raw input activity on `/dev/input/*` to detect true user inactivity (5-minute timeout) and switches to "Powersave", with specific support for device hotplugging to handle new peripherals.
 - **Udev Monitoring**: Uses Netlink to monitor DRM subsystem changes directly (no external udev rules required).
 - **REST API**: Allows manual mode overriding via simple HTTP requests.
 - **JWT Authentication**: Secure API access with JSON Web Tokens.
@@ -15,63 +18,76 @@ A Go daemon to automatically manage power profiles on the Framework Laptop (and 
 
 ## Architecture & Flow
 
-The daemon operates by listening to two main sources of input: Kernel Udev events (for automatic HDMI detection) and HTTP API requests (for manual control).
+The daemon operates by listening to multiple sources of input: Kernel Udev events (HDMI), Input Devices (Activity), Steam Processes, and Virtual Devices (Remote Play).
 
 ```mermaid
 graph TD
-    User[User / Home Assistant]
-    Kernel[Linux Kernel]
-    
-    subgraph Internal ["Internal Components"]
-        direction TB
-        Daemon[Framework Power Daemon]
-        UdevMon[Udev Monitor]
-        APIServer[API Server]
-        Manager[Power Manager]
-    end
-    
-    subgraph Tools ["System Tools"]
-        direction TB
-        PPC[powerprofilesctl]
-        SCX[scxctl]
-        PT[powertop]
-        Sysfs[Sysfs /sys]
+    subgraph Sources [Input Sources]
+        Udev[Udev Monitor]
+        Input[Raw Input Monitor]
+        Steam[Steam Process Check]
+        Remote[Virtual Device Check]
+        API[User API]
     end
 
-    User -- "POST /mode (JWT)" --> APIServer
-    Kernel -- "calpha (DRM Change)" --> UdevMon
-    
-    APIServer --> Manager
-    UdevMon --> Manager
-    
-    Manager --> Logic{Auto Detect?}
-    Logic -- Yes (HDMI Plugged) --> Perf[Performance Mode]
-    Logic -- Yes (HDMI Unplugged) --> Save[Powersave Mode]
-    Logic -- No (Manual) --> Manual[User Selected Mode]
-    
-    Perf & Manual --> ApplyPerf
-    Save --> ApplySave
+    subgraph Logic [State Machine]
+        Main{Power Daemon}
+    end
 
-    subgraph ApplyPerf [Apply Performance]
-        direction TB
-        P1[Set 'balanced'] --> PPC
-        P2[Set 'gaming'] --> SCX
-        P3[Disable Power Save] --> Sysfs
+    subgraph Actions [Power Management]
+        PCTL[powerprofilesctl]
     end
     
-    subgraph ApplySave [Apply Powersave]
-        direction TB
-        S1[Set 'power-saver'] --> PPC
-        S2[Set 'powersave'] --> SCX
-        S3[Auto-Tune] --> PT
-        S4[Enable ASPM/Power Save] --> Sysfs
-    end
+    Udev -->|HDMI Change| Main
+    Input -->|Activity/Timeout| Main
+    Steam -->|Game PID| Main
+    Remote -->|Virtual Device| Main
+    API -->|Override| Main
+
+    Main -->|Set Profile| PCTL
+    Input -.->|fsnotify| Hotplug[Device Hotplug]
+    Hotplug --> Input
 ```
 
-### How it works
-1.  **Monitoring**: The daemon opens a Netlink socket to listen for kernel Udev events. When a DRM (Display) change is detected, it triggers the auto-detection logic.
-2.  **API**: It runs an HTTP server to accept manual mode overrides or status checks.
-3.  **Actions**: Based on the determined mode, it executes external tools (`powerprofilesctl`, `powertop`, etc.) and writes to `/sys` files to optimize the system.
+## Power State Flow
+
+The following flowchart illustrates how the daemon determines which power profile to apply. **Steam Remote Play** takes the highest priority (as it implies active usage without local input), followed by **Idle State**, and then **Game Detection**.
+
+```mermaid
+flowchart TD
+    Start([State Change Event]) --> CheckRP{Is Remote Play Active?}
+    
+    CheckRP -->|Yes| SetPerf[Set Performance]
+    CheckRP -->|No| CheckIdle{Is System Idle?}
+    
+    CheckIdle -->|Yes| SetIdle[Set Power Saver]
+    CheckIdle -->|No| CheckGame{Is Game Running?}
+    
+    CheckGame -->|Yes| SetPerf
+    CheckGame -->|No| AutoDet[Run Auto-Detect]
+    
+    AutoDet --> CheckHDMI{HDMI Connected?}
+    CheckHDMI -->|Yes| SetBal[Set Balanced/Performance]
+    CheckHDMI -->|No| CheckBat{On Battery?}
+    
+    CheckBat -->|Yes| SetSaver[Set Power Saver]
+    CheckBat -->|No| SetBal
+```
+
+## How it works
+
+1.  **Monitoring**:
+    *   **Remote Play**: Polls `/proc/bus/input/devices` to detect virtual controllers created by Steam (identified by empty physical addresses).
+    *   **Input**: Monitors `/dev/input/*` devices directly for user activity. Supports hotplugging.
+    *   **Steam**: Periodically checks for running Steam games.
+    *   **Udev**: Listens for hardware changes (HDMI).
+2.  **Decision Making**:
+    *   **Priority 1: Remote Play**. If streaming is active (virtual controller found), force **Performance** (overrides idle).
+    *   **Priority 2: Idle**. If no local input for 5 minutes, force **Power Saver**.
+    *   **Priority 3: Game**. If a game is running (and not idle), force **Performance**.
+    *   **Priority 4: Auto**. Otherwise, check HDMI/Power source.
+3.  **Action**:
+    *   Executes `powerprofilesctl` or similar tools to apply the profile.
 
 ## Prerequisites
 
@@ -178,58 +194,6 @@ Example:
 /usr/local/bin/framework-powerd serve --address=0.0.0.0 --port=9090
 ```
 
-> **Note**: If you change the port or address, remember to update your API calls (e.g., `curl`) and Home Assistant configuration accordingly.
+> **Note**: If you change the port or address, remember to update your API calls (e.g., `curl`) accordingly.
 
-## Home Assistant Integration
 
-This project includes a custom component for Home Assistant.
-
-### Installation via HACS
-
-1.  **Add Custom Repository**:
-    - Open HACS in Home Assistant.
-    - Go to **Integrations** > **three dots (top right)** > **Custom repositories**.
-    - Add the URL of this repository: `https://github.com/zaolin/framework-powerd`.
-    - Select category: **Integration**.
-    - Click **Add**.
-
-2.  **Install**:
-    - Find "Framework Power Daemon" in the HACS list.
-    - Click **Download**.
-    - Restart Home Assistant.
-
-3.  **Restart Home Assistant**:
-    Restart HA to load the new component.
-
-4.  **Add Integration**:
-    - Go to **Settings > Devices & Services**.
-    - Click **Add Integration**.
-    - Search for **Framework Power Daemon**.
-    - Enter the **Host**, **Port**, and **Token** (if auth is enabled).
-
-### Entities
-
-- **Sensor**: `sensor.framework_power_mode` (Current Mode)
-- **Binary Sensor**: `binary_sensor.framework_hdmi` (HDMI Connected)
-- **Select**: `select.framework_power_control` (Change Mode)
-
-### UI Customization & Lovelace Card
-
-#### 1. Integration Branding
-The integration includes a logo and icon that will automatically appear in your Home Assistant Integrations list.
-
-#### 2. Custom Name
-You can rename the integration display name (e.g., "Main Laptop") by clicking **Configure** on the integration entry in **Settings > Devices & Services**.
-
-#### 3. Custom Lovelace Card
-A custom card is bundled with the integration.
-
-**Usage**:
-1.  After installing via HACS/Manual and restarting, add the resource:
-    - Go to **Settings > Dashboards > three dots > Resources**.
-    - Add Resource: `/framework_powerd/card.js` (JavaScript Module).
-2.  Add the card to your dashboard:
-    ```yaml
-    type: custom:framework-power-card
-    entity: select.framework_power_control
-    ```
