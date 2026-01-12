@@ -179,6 +179,7 @@ This project is compatible with [HACS](https://hacs.xyz/) (Home Assistant Commun
 *   **Power Usage**: Package, Core, RAM (Watts)
 *   **Energy Consumption**: Last 24h & 7 Days (kWh, Sum of Pkg+Cor+RAM)
 *   **Uptime**: System uptime (duration)
+*   **Polling Interval**: Configurable number entity (seconds)
 
 ### API Control
 
