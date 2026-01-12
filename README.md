@@ -73,7 +73,7 @@ flowchart TD
     Start([State Change Event]) --> CheckActive{Is Game Running?}
     
     CheckActive -- Yes --> CheckRemote{Is Remote Play?}
-    CheckRemote -- Yes --> ForcePerf[Force Performance (Ignore Idle)]
+    CheckRemote -- Yes --> ForcePerf["Force Performance (Ignore Idle)"]
     CheckRemote -- No --> CheckInput{Input Detected?}
     
     CheckActive -- No --> CheckInput
@@ -81,8 +81,8 @@ flowchart TD
     CheckInput -- Yes --> ForcePerf
     CheckInput -- No --> CheckIdle{Is System Idle?}
     
-    CheckIdle -- Yes --> Suspend[Pause Game Tree & Set Power Saver]
-    CheckIdle -- No --> Resume[Resume Game Tree & Set Performance]
+    CheckIdle -- Yes --> Suspend["Pause Game Tree & Set Power Saver"]
+    CheckIdle -- No --> Resume["Resume Game Tree & Set Performance"]
     
     Resume --> ForcePerf
 ```
