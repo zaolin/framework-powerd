@@ -110,6 +110,7 @@ flowchart TD
 The daemon relies on the following tools:
 
 - `powerprofilesctl`: For changing system power profiles.
+- `turbostat`: For accurate power monitoring (usually part of `linux-tools` or `linux-cpupower`).
 - `powertop` (Optional): For auto-tuning power parameters.
 - `scxctl` (Optional): For sched-ext scheduler management.
 
@@ -152,6 +153,7 @@ framework-powerd serve --debug
 
 # Custom Idle Timeout (default 5m)
 framework-powerd serve --idle-timeout 30s
+```
 
 ### Home Assistant Integration
 
