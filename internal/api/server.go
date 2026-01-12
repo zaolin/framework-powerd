@@ -12,15 +12,32 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 )
 
-type Server struct {
-	pm        *power.PowerManager
-	jwtSecret []byte
+// StatusResponse represents the system status
+type StatusResponse struct {
+	Mode             string            `json:"mode"`
+	IsIdle           bool              `json:"is_idle"`
+	SecondsUntilIdle int               `json:"seconds_until_idle"`
+	IsGamePaused     bool              `json:"is_game_paused"`
+	IsRemotePlay     bool              `json:"is_remote_play"`
+	GamePID          int               `json:"game_pid"`
+	Uptime           string            `json:"uptime"`
+	UptimeSeconds    float64           `json:"uptime_seconds"`
+	Power            power.PowerStatus `json:"power"`
 }
 
-func NewServer(pm *power.PowerManager, jwtSecret string) *Server {
+// Server handles API requests
+type Server struct {
+	pm           *power.PowerManager
+	powerMonitor *power.PowerMonitor
+	jwtSecret    []byte
+}
+
+// NewServer creates a new API server
+func NewServer(pm *power.PowerManager, monitor *power.PowerMonitor, jwtSecret string) *Server {
 	return &Server{
-		pm:        pm,
-		jwtSecret: []byte(jwtSecret),
+		pm:           pm,
+		powerMonitor: monitor,
+		jwtSecret:    []byte(jwtSecret),
 	}
 }
 
@@ -86,10 +103,8 @@ func (s *Server) HandleMode(w http.ResponseWriter, r *http.Request) {
 		err = s.pm.SetPerformance("API Request")
 	case "powersave":
 		err = s.pm.SetPowersave("API Request")
-	case "auto":
-		err = s.pm.AutoDetect()
 	default:
-		http.Error(w, "Invalid mode. Use 'performance', 'powersave', or 'auto'", http.StatusBadRequest)
+		http.Error(w, "Invalid mode. Use 'performance' or 'powersave'", http.StatusBadRequest)
 		return
 	}
 
@@ -106,12 +121,33 @@ func (s *Server) HandleMode(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) HandleStatus(w http.ResponseWriter, r *http.Request) {
-	connected, _ := s.pm.IsHDMIConnected()
-	mode := s.pm.GetCurrentMode()
-	status := map[string]interface{}{
-		"hdmi_connected": connected,
-		"mode":           mode,
+	status := s.pm.GetStatus()
+
+	resp := StatusResponse{
+		Mode:             status.Mode,
+		IsIdle:           status.IsIdle,
+		SecondsUntilIdle: int(status.SecondsUntilIdle),
+		IsGamePaused:     status.IsGamePaused,
+		IsRemotePlay:     status.IsRemotePlay,
+		GamePID:          status.GamePID,
+		Uptime:           power.GetUptime(),
+		UptimeSeconds:    power.GetUptimeSeconds(),
+		Power:            s.powerMonitor.GetStatus(),
 	}
+
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(status)
+	json.NewEncoder(w).Encode(resp)
+}
+
+func (s *Server) HandleActivity(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	s.pm.TriggerActivity()
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(map[string]string{"message": "Activity triggered, idle timer reset"})
 }

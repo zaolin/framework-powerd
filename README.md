@@ -9,12 +9,11 @@ A Go daemon to automatically manage power profiles on the **Framework Desktop**,
 
 ## Features
 
-- **Automated Power Management**: Switches to "Performance" when HDMI is connected and "Powersave" when disconnected.
-- **Steam Game Detection**: Automatically switches to "Performance" when a Steam game is running (scanning `/proc` for `SteamAppId`).
-- **Steam Remote Play Detection**: Detects active Remote Play streaming sessions by monitoring `/proc/bus/input/devices` for virtual input devices (controllers with empty physical addresses) and forces "Performance" mode.
-- **Idle Detection**: Monitors raw input activity on `/dev/input/*` to detect true user inactivity (5-minute timeout) and switches to "Powersave", with specific support for device hotplugging to handle new peripherals.
-- **Udev Monitoring**: Uses Netlink to monitor DRM subsystem changes directly (no external udev rules required).
-- **REST API**: Allows manual mode overriding via simple HTTP requests.
+- **Automated Power Management**: Switches to "Performance" during active usage (Gaming/Input) and "Powersave" during inactivity.
+- **Idle Detection**: Monitors raw input activity (default 5-minute timeout). Support for **Joystick Deadzones** and **Event Deduplication** to prevent drift.
+- **Game Pausing**: Recursively pauses the entire process tree of a Steam game (including Proton/Wine wrappers) when idle. **Syncs state** on startup to prevent conflicts.
+- **Steam Remote Play Detection**: Detects virtual input devices from Remote Play (specifically `js` interfaces) to keep the system active.
+- **REST API**: Allows manual mode overriding and idle resetting.
 - **JWT Authentication**: Secure API access with JSON Web Tokens.
 - **Systemd Integration**: Runs effectively as a background service.
 
@@ -22,13 +21,11 @@ A Go daemon to automatically manage power profiles on the **Framework Desktop**,
 
 The daemon operates by listening to multiple sources of input: Kernel Udev events (HDMI), Input Devices (Activity), Steam Processes, and Virtual Devices (Remote Play).
 
-```mermaid
-graph TD
     subgraph Sources [Input Sources]
-        Udev[Udev Monitor]
         Input[Raw Input Monitor]
         Steam[Steam Process Check]
-        Remote[Virtual Device Check]
+        Remote[Virtual Joystick Check]
+        Turbo[Turbostat Power Monitor]
         API[User API]
     end
 
@@ -38,58 +35,75 @@ graph TD
 
     subgraph Actions [Power Management]
         PCTL[powerprofilesctl]
+        Pauser[Recursive Process Pauser]
     end
     
-    Udev -->|HDMI Change| Main
-    Input -->|Activity/Timeout| Main
+    Input -->|Activity| Main
     Steam -->|Game PID| Main
     Remote -->|Virtual Device| Main
-    API -->|Override| Main
+    Turbo -->|Power/Energy Stats| Main
+    API -->|Override/Activity| Main
 
     Main -->|Set Profile| PCTL
+    Main -->|SIGSTOP/SIGCONT| Pauser
     Input -.->|fsnotify| Hotplug[Device Hotplug]
     Hotplug --> Input
 ```
 
+## Power Monitoring
+
+The daemon uses `turbostat` to provide accurate, real-time power consumption metrics.
+
+*   **Source**: `turbostat` (running via `sudo`, reading MSRs).
+*   **Metrics**:
+    *   **Package**: Total package power.
+    *   **Core**: CPU Core power.
+    *   **RAM**: Memory power.
+*   **Total Energy**: Calculated as the **SUM** of `PkgWatt` + `CorWatt` + `RAMWatt` to account for all reported sensors as requested.
+*   **History**: Tracks 24-hour and 7-day rolling energy consumption in **kWh**.
+
 ## Power State Flow
 
-The following flowchart illustrates how the daemon determines which power profile to apply. **Steam Remote Play** takes the highest priority (as it implies active usage without local input), followed by **Idle State**, and then **Game Detection**.
+The following flowchart illustrates how the daemon determines which power profile to apply. **Active Gaming** (either Local Input or Remote Play + Running Game) takes priority.
 
 ```mermaid
 flowchart TD
-    Start([State Change Event]) --> CheckRP{Is Remote Play Active?}
+    Start([State Change Event]) --> CheckActive{Is Game Running?}
     
-    CheckRP -->|Yes| SetPerf[Set Performance]
-    CheckRP -->|No| CheckIdle{Is System Idle?}
+    CheckActive -- Yes --> CheckRemote{Is Remote Play?}
+    CheckRemote -- Yes --> ForcePerf[Force Performance (Ignore Idle)]
+    CheckRemote -- No --> CheckInput{Input Detected?}
     
-    CheckIdle -->|Yes| SetIdle[Set Power Saver]
-    CheckIdle -->|No| CheckGame{Is Game Running?}
+    CheckActive -- No --> CheckInput
     
-    CheckGame -->|Yes| SetPerf
-    CheckGame -->|No| AutoDet[Run Auto-Detect]
+    CheckInput -- Yes --> ForcePerf
+    CheckInput -- No --> CheckIdle{Is System Idle?}
     
-    AutoDet --> CheckHDMI{HDMI Connected?}
-    CheckHDMI -->|Yes| SetBal[Set Balanced/Performance]
-    CheckHDMI -->|No| CheckBat{On Battery?}
+    CheckIdle -- Yes --> Suspend[Pause Game Tree & Set Power Saver]
+    CheckIdle -- No --> Resume[Resume Game Tree & Set Performance]
     
-    CheckBat -->|Yes| SetSaver[Set Power Saver]
-    CheckBat -->|No| SetBal
+    Resume --> ForcePerf
 ```
 
 ## How it works
 
 1.  **Monitoring**:
-    *   **Remote Play**: Polls `/proc/bus/input/devices` to detect virtual controllers created by Steam (identified by empty physical addresses).
-    *   **Input**: Monitors `/dev/input/*` devices directly for user activity. Supports hotplugging.
-    *   **Steam**: Periodically checks for running Steam games.
-    *   **Udev**: Listens for hardware changes (HDMI).
+    *   **Remote Play**: Polls `/proc/bus/input/devices` to detect virtual joysticks.
+    *   **Input**: Monitors `/dev/input/js*` (with deadzone) and valid `/dev/input/event*` devices. Ignores noise and init bursts.
+    *   **Steam**: Periodically checks for running Steam games and identifies the "Reaper" root process.
+
+> [!NOTE]
+> For a detailed explanation of the idle detection mechanism, including diagrams, see [Idle Detection Logic](docs/idle_logic.md).
+
+
 2.  **Decision Making**:
-    *   **Priority 1: Remote Play**. If streaming is active (virtual controller found), force **Performance** (overrides idle).
-    *   **Priority 2: Idle**. If no local input for 5 minutes, force **Power Saver**.
-    *   **Priority 3: Game**. If a game is running (and not idle), force **Performance**.
-    *   **Priority 4: Auto**. Otherwise, check HDMI/Power source.
+    *   **Priority 1: Active Usage**.
+        *   **Local Input**: Moving mouse/keyboard/controller -> **Performance**.
+        *   **Remote Play**: IF Remote Play is active **AND** a Game is running -> **Performance** (Ignores Idle).
+    *   **Priority 2: Idle (No Active Usage)**.
+        *   **Action**: Force **Power Saver**. If a game is running, **Recursively Pause It** (targeting `wineserver` or game process, avoiding Steam `reaper`).
 3.  **Action**:
-    *   Executes `powerprofilesctl` or similar tools to apply the profile.
+    *   Manages Power Profiles and Process States (Running/Stopped).
 
 ## Prerequisites
 
@@ -98,8 +112,6 @@ The daemon relies on the following tools:
 - `powerprofilesctl`: For changing system power profiles.
 - `powertop` (Optional): For auto-tuning power parameters.
 - `scxctl` (Optional): For sched-ext scheduler management.
-
-
 
 ## Installation
 
@@ -130,8 +142,41 @@ The daemon relies on the following tools:
 
 ## Usage
 
-### Auto Mode
-The daemon starts in auto mode and listens for HDMI events.
+### CLI Flags
+
+You can customize the daemon's behavior with flags:
+
+```bash
+# Debug mode (verbose logs)
+framework-powerd serve --debug
+
+# Custom Idle Timeout (default 5m)
+framework-powerd serve --idle-timeout 30s
+
+### Home Assistant Integration
+
+This project is compatible with [HACS](https://hacs.xyz/) (Home Assistant Community Store).
+
+**Installation via HACS**:
+1.  Open **HACS** in Home Assistant.
+2.  Click the menu (three dots) in the top right corner and select **Custom repositories**.
+3.  Add the repository URL: `https://github.com/zaolin/framework-powerd`.
+4.  Select **Integration** as the Category and click **Add**.
+5.  Find **Framework Power Daemon** in the list and click **Download**.
+6.  Restart Home Assistant.
+7.  Go to **Settings > Devices & Services > Add Integration**.
+8.  Search for **Framework Power Daemon** and configure it.
+    *   **Host**: IP address of the daemon (e.g. `192.168.1.x` or `localhost` if on same machine).
+    *   **Port**: `8080` (default).
+    *   **JWT Secret**: If you started the daemon with a secret.
+
+**Sensors Provided**:
+*   **Power Mode**: `performance` / `powersave`
+*   **System Idle**: `True` / `False`
+*   **Game Status**: PID and Running/Paused state
+*   **Power Usage**: Package, Core, RAM (Watts)
+*   **Energy Consumption**: Last 24h & 7 Days (kWh, Sum of Pkg+Cor+RAM)
+*   **Uptime**: System uptime (duration)
 
 ### API Control
 
@@ -142,25 +187,25 @@ If JWT authentication is enabled, you must export your token first:
 export TOKEN="your_jwt_token_here"
 ```
 
-- **Performance**:
+- **Set Performance**:
   ```bash
   curl -H "Authorization: Bearer $TOKEN" -X POST -d '{"mode":"performance"}' http://localhost:8080/mode
   ```
 
-- **Powersave**:
+- **Set Powersave**:
   ```bash
   curl -H "Authorization: Bearer $TOKEN" -X POST -d '{"mode":"powersave"}' http://localhost:8080/mode
   ```
 
-- **Auto**:
+- **Trigger Activity (Reset Idle Timer)**:
   ```bash
-  curl -H "Authorization: Bearer $TOKEN" -X POST -d '{"mode":"auto"}' http://localhost:8080/mode
+  curl -H "Authorization: Bearer $TOKEN" -X POST http://localhost:8080/activity
   ```
 
-- **Status**:
+- **Get Status**:
   ```bash
   curl -H "Authorization: Bearer $TOKEN" http://localhost:8080/status
-  # Output: {"hdmi_connected":false,"mode":"powersave"}
+  # Output: {"mode":"powersave","is_idle":true,"seconds_until_idle":0,"is_game_paused":true,...}
   ```
 
 ### Authentication

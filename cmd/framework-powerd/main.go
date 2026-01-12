@@ -22,9 +22,11 @@ import (
 
 var CLI struct {
 	Serve struct {
-		Port      int    `help:"Port to listen on" default:"8080"`
-		Address   string `help:"Address to listen on" default:"localhost"`
-		JWTSecret string `help:"Secret key for JWT authentication" env:"JWT_SECRET" name:"jwt-secret"`
+		Port        int           `help:"Port to listen on" default:"8080"`
+		Address     string        `help:"Address to listen on" default:"localhost"`
+		JWTSecret   string        `help:"Secret key for JWT authentication" env:"JWT_SECRET" name:"jwt-secret"`
+		Debug       bool          `help:"Enable verbose logging" short:"d"`
+		IdleTimeout time.Duration `help:"Time before entering idle mode" default:"5m"`
 	} `cmd:"" help:"Start the power daemon"`
 
 	Token struct {
@@ -75,80 +77,87 @@ func runServer() {
 		log.Fatalf("Dependencies missing: %v", err)
 	}
 
-	// Initial Auto-Detect
+	// Initial Default State
 	log.Println("Starting Framework Power Daemon...")
-	if err := pm.AutoDetect(); err != nil {
-		log.Printf("Initial auto-detect failed: %v\n", err)
+	if err := pm.SetDefaultActive(); err != nil {
+		log.Printf("Initial detection failed: %v\n", err)
 	}
-
-	// Start Udev Monitor
-	udevMon, err := monitor.NewMonitor()
-	if err != nil {
-		log.Fatalf("Failed to start Udev monitor: %v", err)
-	}
-	defer udevMon.Stop()
-
-	events, err := udevMon.Start()
-	if err != nil {
-		log.Fatalf("Failed to start listening to Udev events: %v", err)
-	}
-
-	go func() {
-		for event := range events {
-			if event.Subsystem == "drm" && event.Action == "change" {
-				log.Println("Detected DRM change event, triggering auto-detect...")
-				if err := pm.AutoDetect(); err != nil {
-					log.Printf("Auto-detect failed: %v\n", err)
-				}
-			}
-		}
-	}()
 
 	// State tracking
 	var isGameRunning bool
+	var gamePID int
 	var isIdle bool
-	var isRemotePlay bool
+	var isRemotePlay bool // Used mainly for logging now, as idle handles "active" remote play
 
-	// Start Idle Monitor (Raw Input)
-	// Timeout: 5 Minutes
-	idleMon := monitor.NewIdleMonitor(5 * time.Minute)
-
-	idleCtx, idleCancel := context.WithCancel(context.Background())
-	defer idleCancel()
+	// Components
+	pauser := power.NewProcessPauser()
 
 	// Logic handler
 	updatePowerState := func() {
-		// Priority:
-		// 1. Remote Play (Active Streaming) -> Performance (Overrides Idle)
-		// 2. Idle -> Power Saver
-		// 3. Game Running -> Performance
-		// 4. Auto Detect
 
-		if isRemotePlay {
-			log.Println("[PowerLogic] Remote Play Active. Force Performance.")
-			if err := pm.SetPerformance("Remote Play Active"); err != nil {
-				log.Printf("Failed to set performance: %v\n", err)
+		// New Priority:
+		// 1. Idle -> Power Saver (AND Pause Game if running)
+		// 2. Active (Input Detected) -> Performance (AND Resume Game if running)
+
+		// Refined Priority based on User Feedback:
+		// "remote play and a game is active then ignore idle"
+
+		shouldIdle := isIdle
+
+		if isRemotePlay && isGameRunning {
+			if isIdle {
+				log.Println("[PowerLogic] System Idle, but Remote Play & Game Active. Keeping Performance.")
 			}
-		} else if isIdle {
-			// Idle takes precedence over Game Running (unless Remote Play is active)
-			log.Println("[PowerLogic] System Idle. Force Power Saver.")
+			shouldIdle = false
+		}
+
+		if shouldIdle {
+			log.Println("[PowerLogic] System Idle (No Input). Force Power Saver.")
+
+			// Pause Game if running
+			if isGameRunning && gamePID > 0 {
+				if !pauser.IsPaused() {
+					if err := pauser.Pause(gamePID); err != nil {
+						log.Printf("Failed to pause game: %v\n", err)
+					}
+				}
+			}
+
 			if err := pm.SetPowersave("System Idle"); err != nil {
 				log.Printf("Failed to set powersave: %v\n", err)
 			}
-		} else if isGameRunning {
-			// Not Idle, Game Running -> Performance
-			log.Println("[PowerLogic] Active & Game Running. Force Performance.")
-			if err := pm.SetPerformance("Game Active"); err != nil {
-				log.Printf("Failed to set performance: %v\n", err)
-			}
 		} else {
-			// Not Idle, No Game -> Auto Detect
-			log.Println("[PowerLogic] Active & No Game. Auto-Detect.")
-			if err := pm.AutoDetect(); err != nil {
-				log.Printf("Failed to auto-detect: %v\n", err)
+			// System Active
+			// Resume Game if paused
+			if pauser.IsPaused() {
+				if err := pauser.Resume(); err != nil {
+					log.Printf("Failed to resume game: %v\n", err)
+				}
+			}
+
+			if isGameRunning || isRemotePlay {
+				log.Println("[PowerLogic] Active Usage (Game/Remote). Force Performance.")
+				if err := pm.SetPerformance("Game/Remote Active"); err != nil {
+					log.Printf("Failed to set performance: %v\n", err)
+				}
+			} else {
+				log.Println("[PowerLogic] Active Usage (Desktop). Set Default Active.")
+				if err := pm.SetDefaultActive(); err != nil {
+					log.Printf("Failed to set default active: %v\n", err)
+				}
 			}
 		}
+
+		// Update Status within (potentially) new state
+		pm.SetState(isIdle, isRemotePlay, isGameRunning, gamePID, pauser.IsPaused())
 	}
+
+	// Start Idle Monitor (Raw Input)
+	idleMon := monitor.NewIdleMonitor(CLI.Serve.IdleTimeout, CLI.Serve.Debug)
+	pm.SetIdleMonitor(idleMon)
+
+	idleCtx, idleCancel := context.WithCancel(context.Background())
+	defer idleCancel()
 
 	go func() {
 		if err := idleMon.Start(idleCtx,
@@ -171,10 +180,15 @@ func runServer() {
 	defer rpCancel()
 
 	go func() {
-		// This requires Raw Sockets (CAP_NET_RAW or Root)
 		if err := rpDet.Start(rpCtx,
-			func() {
+			func(devices []string) {
 				isRemotePlay = true
+				// Note: Remote Play creates a virtual input device.
+				// We now explicitly add these devices to the IdleMonitor logic to ensure
+				// they are watched, even if hotplug detection missed them or they are unusual.
+				for _, dev := range devices {
+					idleMon.AddDevice(idleCtx, dev)
+				}
 				updatePowerState()
 			},
 			func() {
@@ -190,6 +204,19 @@ func runServer() {
 	// Poll every 5 seconds
 	steamDet := detector.NewSteamDetector(5 * time.Second)
 
+	// Single Synchronous Detection on Startup
+	// This ensures we catch any running/paused game immediately even after daemon restart
+	if initialPID, err := steamDet.Detect(); err == nil && initialPID > 0 {
+		log.Printf("[Startup] Detected existing Steam Game (PID: %d)\n", initialPID)
+		isGameRunning = true
+		gamePID = initialPID
+		steamDet.LastPID = initialPID
+		pauser.SyncState(initialPID)
+		// No need to call updatePowerState() here, it will be called by idleMon or rpDet callbacks
+		// or we can force it:
+		pm.SetState(isIdle, isRemotePlay, isGameRunning, gamePID, pauser.IsPaused())
+	}
+
 	// Create a context for the detector
 	detCtx, detCancel := context.WithCancel(context.Background())
 	defer detCancel()
@@ -199,41 +226,49 @@ func runServer() {
 			// On Game Start
 			log.Printf("Steam Game Started (PID: %d).\n", pid)
 			isGameRunning = true
-			if !isIdle {
-				if err := pm.SetPerformance(fmt.Sprintf("Steam Game (PID %d)", pid)); err != nil {
-					log.Printf("Failed to set performance mode: %v\n", err)
-				}
-			} else {
-				log.Println("Steam Game Started but System is Idle. Keeping Power Saver.")
-			}
+			gamePID = pid
+
+			// Check if it's already paused (e.g. restarts)
+			pauser.SyncState(pid)
+
+			updatePowerState()
 		},
 		func() {
 			// On Game Stop
 			log.Println("Steam Game Stopped.")
 			isGameRunning = false
-			// If idle, we stay in powersave (which is consistent).
-			// If active, we revert to auto-detect.
-			if !isIdle {
-				if err := pm.AutoDetect(); err != nil {
-					log.Printf("Failed to revert to auto-detect: %v\n", err)
-				}
+			gamePID = 0
+			// Ensure we resume if we were paused (though process is likely gone/stopping)
+			if pauser.IsPaused() {
+				pauser.Resume()
 			}
+			updatePowerState()
 		},
 	)
 
+	// Start Power Monitor
+	powerMon := power.NewPowerMonitor()
+	pwrCtx, pwrCancel := context.WithCancel(context.Background())
+	defer pwrCancel()
+
+	// Run turbostat in background
+	go powerMon.Start(pwrCtx)
+
 	// Start API Server
 	jwtSecret := strings.TrimSpace(CLI.Serve.JWTSecret)
-	apiServer := api.NewServer(pm, jwtSecret)
+	apiServer := api.NewServer(pm, powerMon, jwtSecret)
 
 	// Apply middleware if secret is set
 	if jwtSecret != "" {
 		log.Println("JWT Authentication enabled")
 		http.HandleFunc("/mode", apiServer.AuthMiddleware(apiServer.HandleMode))
 		http.HandleFunc("/status", apiServer.AuthMiddleware(apiServer.HandleStatus))
+		http.HandleFunc("/activity", apiServer.AuthMiddleware(apiServer.HandleActivity))
 	} else {
 		log.Println("Warning: JWT Authentication disabled (no secret provided)")
 		http.HandleFunc("/mode", apiServer.HandleMode)
 		http.HandleFunc("/status", apiServer.HandleStatus)
+		http.HandleFunc("/activity", apiServer.HandleActivity)
 	}
 
 	stop := make(chan os.Signal, 1)

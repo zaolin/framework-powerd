@@ -2,9 +2,12 @@ package monitor
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"os"
 	"path/filepath"
+	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -13,15 +16,20 @@ import (
 
 // IdleMonitor watches for system idle state by monitoring raw input devices
 type IdleMonitor struct {
-	Timeout      time.Duration
-	lastActivity int64 // Atomic Unix timestamp
+	Timeout        time.Duration
+	Debug          bool
+	lastActivity   int64 // Atomic Unix timestamp
+	watchedDevices map[string]bool
+	mu             sync.Mutex
 }
 
 // NewIdleMonitor creates a new monitor with the specified timeout
-func NewIdleMonitor(timeout time.Duration) *IdleMonitor {
+func NewIdleMonitor(timeout time.Duration, debug bool) *IdleMonitor {
 	return &IdleMonitor{
-		Timeout:      timeout,
-		lastActivity: time.Now().Unix(),
+		Timeout:        timeout,
+		Debug:          debug,
+		lastActivity:   time.Now().Unix(),
+		watchedDevices: make(map[string]bool),
 	}
 }
 
@@ -107,8 +115,40 @@ func (m *IdleMonitor) handleHotplug(ctx context.Context, watcher *fsnotify.Watch
 	}
 }
 
+// AddDevice manually registers a device for watching
+func (m *IdleMonitor) AddDevice(ctx context.Context, path string) {
+	log.Printf("[IdleMonitor] Manually adding device: %s\n", path)
+	go m.watchDevice(ctx, path)
+}
+
 // watchDevice reads from a device file and updates lastActivity on any data
 func (m *IdleMonitor) watchDevice(ctx context.Context, path string) {
+	m.mu.Lock()
+	if m.watchedDevices[path] {
+		m.mu.Unlock()
+		return
+	}
+	m.watchedDevices[path] = true
+	m.mu.Unlock()
+
+	defer func() {
+		m.mu.Lock()
+		delete(m.watchedDevices, path)
+		m.mu.Unlock()
+	}()
+
+	// Deduplication: If this is an event device, check if it's also a joystick.
+	// If so, we skip watching the event device and rely on the js* device to handle deadzones better.
+	if strings.Contains(path, "event") && m.isJoystick(path) {
+		if m.Debug {
+			log.Printf("[IdleMonitor] Debug: Ignoring %s (handled by js interface)\n", path)
+		}
+		m.mu.Lock()
+		delete(m.watchedDevices, path)
+		m.mu.Unlock()
+		return
+	}
+
 	// Attempt to open the device. If it was just created, might need a retry?
 	// But simple open usually works if the node exists.
 	file, err := os.Open(path)
@@ -118,24 +158,91 @@ func (m *IdleMonitor) watchDevice(ctx context.Context, path string) {
 	}
 	defer file.Close()
 
-	// We read 1 byte at a time. The read blocks until input arrives.
-	buf := make([]byte, 1)
+	if m.Debug {
+		log.Printf("[IdleMonitor] Debug: Opened watching device: %s\n", path)
+	}
+
+	// We read 1 event at a time.
+	// struct input_event is typically 24 bytes on 64-bit.
+	// struct js_event is 8 bytes.
+	buf := make([]byte, 64)
+	var lastLog time.Time
+
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		default:
 			// Blocking read
-			_, err := file.Read(buf)
+			n, err := file.Read(buf)
 			if err != nil {
 				// Device might have been disconnected
-				// log.Printf("[IdleMonitor] Device %s stopped/disconnected: %v\n", path, err)
+				if m.Debug {
+					log.Printf("[IdleMonitor] Debug: Device %s stopped/disconnected: %v\n", path, err)
+				}
 				return
 			}
+
+			if n <= 0 {
+				continue
+			}
+
+			// Handle Javascript Events (deadzone + init filter)
+			if strings.Contains(path, "js") && n >= 8 {
+				// struct js_event { u32 time; s16 value; u8 type; u8 number; }
+				// offsets: time=0-4, value=4-6, type=6, number=7
+
+				// 1. Filter Init Events (0x80)
+				typeByte := buf[6]
+				if typeByte&0x80 != 0 {
+					continue
+				}
+
+				// 2. Deadzone Filter for Axis (Type 2)
+				if typeByte&0x7F == 2 {
+					// parse value (int16 little endian)
+					val := int16(uint16(buf[4]) | uint16(buf[5])<<8)
+					// Deadzone ~15% (4000 / 32767)
+					if val > -4000 && val < 4000 {
+						continue
+					}
+				}
+			}
+
 			// Update activity timestamp
 			atomic.StoreInt64(&m.lastActivity, time.Now().Unix())
+
+			if m.Debug {
+				if time.Since(lastLog) > 5*time.Second {
+					log.Printf("[IdleMonitor] Debug: Input detected on %s\n", path)
+					lastLog = time.Now()
+				}
+			}
 		}
 	}
+}
+
+// isJoystick checks if an event device has a corresponding joystick handler
+func (m *IdleMonitor) isJoystick(eventPath string) bool {
+	// Map /dev/input/eventX -> /sys/class/input/eventX/device/handlers
+	base := filepath.Base(eventPath) // eventX
+	sysPath := fmt.Sprintf("/sys/class/input/%s/device/handlers", base)
+
+	data, err := os.ReadFile(sysPath)
+	if err != nil {
+		return false
+	}
+
+	// Handlers content: "sysrq kbd event8 js0"
+	content := string(data)
+	isJs := strings.Contains(content, "js")
+	if m.Debug && !isJs && strings.Contains(content, "event") {
+		// Log why we think it's NOT a joystick if it's an event device we are checking
+		// This might be spammy so maybe only once per device?
+		// actually isJoystick is called once on startup/hotplug.
+		log.Printf("[IdleMonitor] Debug: Checked %s handlers: '%s' -> isJoystick=%v\n", base, strings.TrimSpace(content), isJs)
+	}
+	return isJs
 }
 
 // runTicker checks every second if the timeout has been exceeded
@@ -168,5 +275,24 @@ func (m *IdleMonitor) runTicker(ctx context.Context, onIdle func(), onActive fun
 				}
 			}
 		}
+	}
+}
+
+// GetTimeUntilIdle returns the duration remaining until the system enters idle state
+func (m *IdleMonitor) GetTimeUntilIdle() time.Duration {
+	last := atomic.LoadInt64(&m.lastActivity)
+	elapsed := time.Since(time.Unix(last, 0))
+	remaining := m.Timeout - elapsed
+	if remaining < 0 {
+		return 0
+	}
+	return remaining
+}
+
+// ResetActivity manually resets the idle timer
+func (m *IdleMonitor) ResetActivity() {
+	atomic.StoreInt64(&m.lastActivity, time.Now().Unix())
+	if m.Debug {
+		log.Println("[IdleMonitor] Debug: Activity manually reset via API")
 	}
 }

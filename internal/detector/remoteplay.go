@@ -23,7 +23,7 @@ func NewRemotePlayDetector() *RemotePlayDetector {
 }
 
 // Start begins polling /proc/bus/input/devices
-func (d *RemotePlayDetector) Start(ctx context.Context, onStart func(), onStop func()) error {
+func (d *RemotePlayDetector) Start(ctx context.Context, onStart func([]string), onStop func()) error {
 	ticker := time.NewTicker(d.PollInterval)
 	defer ticker.Stop()
 
@@ -40,49 +40,61 @@ func (d *RemotePlayDetector) Start(ctx context.Context, onStart func(), onStop f
 	}
 }
 
-func (d *RemotePlayDetector) check(onStart func(), onStop func()) {
-	found := d.scanForVirtualDevices()
+func (d *RemotePlayDetector) check(onStart func([]string), onStop func()) {
+	devices, found := d.scanForVirtualDevices()
 
-	if found && !d.isActive {
-		d.isActive = true
-		log.Println("[RemotePlay] Detected Virtual Input Device (Steam Remote Play). Active.")
-		onStart()
-	} else if !found && d.isActive {
-		d.isActive = false
-		log.Println("[RemotePlay] Virtual Input Device disappeared. Stopped.")
-		onStop()
+	if found {
+		if !d.isActive {
+			d.isActive = true
+			log.Printf("[RemotePlay] Detected Virtual Input Device (Steam Remote Play). Active. Devices: %v\n", devices)
+			onStart(devices)
+		} else {
+			// Already active. We could check if device list changed, but for now assuming stability.
+			// Ideally we might want to re-emit if new devices appear?
+			// Let's stick to simple state transition for now, or maybe always emit on check?
+			// No, "onStart" implies transition.
+			// Wait, if a device is added late?
+			// Simplest: only trigger on transition from not-active to active.
+		}
+	} else {
+		if d.isActive {
+			d.isActive = false
+			log.Println("[RemotePlay] Virtual Input Device disappeared. Stopped.")
+			onStop()
+		}
 	}
 }
 
 // scanForVirtualDevices reads /proc/bus/input/devices and looks for
 // devices with empty Phys address acting as Joysticks/Gamepads.
-func (d *RemotePlayDetector) scanForVirtualDevices() bool {
+func (d *RemotePlayDetector) scanForVirtualDevices() ([]string, bool) {
 	data, err := os.ReadFile("/proc/bus/input/devices")
 	if err != nil {
 		log.Printf("[RemotePlay] Error reading /proc/bus/input/devices: %v\n", err)
-		return false
+		return nil, false
 	}
 
 	blocks := strings.Split(string(data), "\n\n")
+	var foundPaths []string
+	found := false
 
 	for _, block := range blocks {
 		if block == "" {
 			continue
 		}
 
-		// Analysis variables
 		lines := strings.Split(block, "\n")
 		var hasName bool
 		var isVirtualPhys bool
 		var isJoystick bool
+		var hasUniq bool
+		var jsPath string
 
 		for _, line := range lines {
 			line = strings.TrimSpace(line)
 
-			// 1. Check Name
 			if strings.HasPrefix(line, "N: Name=") {
 				rawName := strings.ToLower(line)
-				// Common names for virtual controllers
 				if strings.Contains(rawName, "xbox") ||
 					strings.Contains(rawName, "controller") ||
 					strings.Contains(rawName, "gamepad") ||
@@ -91,32 +103,41 @@ func (d *RemotePlayDetector) scanForVirtualDevices() bool {
 				}
 			}
 
-			// 2. Check Phys Address
-			// Virtual devices often have empty Phys or specific virtual paths
 			if strings.HasPrefix(line, "P: Phys=") {
-				// "P: Phys=" (Empty) is common for uinput/virtual devices
 				val := strings.TrimPrefix(line, "P: Phys=")
 				if val == "" {
 					isVirtualPhys = true
 				}
 			}
 
-			// 3. Check Handlers (Must be a joystick/event device)
+			if strings.HasPrefix(line, "U: Uniq=") {
+				val := strings.TrimPrefix(line, "U: Uniq=")
+				if val != "" {
+					hasUniq = true
+				}
+			}
+
 			if strings.HasPrefix(line, "H: Handlers=") {
-				if strings.Contains(line, "js") { // js0, js1, etc.
+				if strings.Contains(line, "js") {
 					isJoystick = true
+				}
+				// Extract handlers
+				parts := strings.Fields(strings.TrimPrefix(line, "H: Handlers="))
+				for _, part := range parts {
+					if strings.HasPrefix(part, "js") {
+						jsPath = "/dev/input/" + part
+					}
 				}
 			}
 		}
 
-		// Criteria: Empty Phys AND (Joystick Handler OR Known Controller Name)
-		// We emphasize Joystick handler because a keyboard/mouse might also satisfy other conditions
-		// but Steam Remote Play primarily creates a gamepad.
-		if isVirtualPhys && (isJoystick || hasName) {
-			// Found one!
-			return true
+		if isVirtualPhys && !hasUniq && (isJoystick || hasName) {
+			found = true
+			if jsPath != "" {
+				foundPaths = append(foundPaths, jsPath)
+			}
 		}
 	}
 
-	return false
+	return foundPaths, found
 }

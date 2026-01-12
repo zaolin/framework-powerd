@@ -7,6 +7,7 @@ import (
 	"log"
 	"os"
 	"strconv"
+	"strings"
 	"syscall"
 	"time"
 )
@@ -43,7 +44,7 @@ func (d *SteamDetector) Start(ctx context.Context, onGameStart func(pid int), on
 }
 
 func (d *SteamDetector) check(onGameStart func(pid int), onGameStop func()) {
-	pid, err := d.detect()
+	pid, err := d.Detect()
 	if err != nil {
 		log.Printf("[SteamDetector] Error scanning processes: %v\n", err)
 		return
@@ -66,8 +67,8 @@ func (d *SteamDetector) check(onGameStart func(pid int), onGameStop func()) {
 	}
 }
 
-// detect scans /proc for the highest PID having SteamAppId set owned by UID 1000
-func (d *SteamDetector) detect() (int, error) {
+// Detect scans /proc for the highest PID having SteamAppId set owned by UID 1000
+func (d *SteamDetector) Detect() (int, error) {
 	entries, err := os.ReadDir("/proc")
 	if err != nil {
 		return 0, err
@@ -106,7 +107,89 @@ func (d *SteamDetector) detect() (int, error) {
 		}
 	}
 
-	return maxPID, nil
+	if maxPID > 0 {
+		return d.findGameRoot(maxPID), nil
+	}
+
+	return 0, nil
+}
+
+// findGameRoot walks up the process tree to find the best process to pause
+// Priority:
+// 1. wineserver (for Proton/Wine games) - pausing this pauses the entire Windows environment safely
+// 2. Child of 'reaper' - pausing the reaper itself can cause instability/disconnects.
+func (d *SteamDetector) findGameRoot(pid int) int {
+	current := pid
+	prev := pid // Keep track of the previous PID (child of current)
+
+	for i := 0; i < 10; i++ { // Max depth 10 to avoid infinite loops
+		ppid, name, err := getProcessInfo(current)
+		if err != nil {
+			return pid // Fallback to last known good
+		}
+
+		// 1. Prefer wineserver
+		if strings.Contains(name, "wineserver") {
+			log.Printf("[SteamDetector] Found wineserver root: %d\n", current)
+			return current
+		}
+
+		// 2. Stop at reaper, but return its child
+		if strings.Contains(name, "reaper") {
+			log.Printf("[SteamDetector] Found Reaper (%d). Using child (%d) as root to avoid pausing reaper.\n", current, prev)
+			return prev
+		}
+
+		if ppid <= 1 {
+			return pid // Reached init
+		}
+
+		prev = current
+		current = ppid
+	}
+	return pid
+}
+
+func getProcessInfo(pid int) (int, string, error) {
+	data, err := os.ReadFile(fmt.Sprintf("/proc/%d/stat", pid))
+	if err != nil {
+		return 0, "", err
+	}
+
+	// Format: pid (comm) state ppid ...
+	// comm is in parentheses
+	str := string(data)
+	start := strings.Index(str, "(")
+	end := strings.LastIndex(str, ")")
+	if start == -1 || end == -1 || end < start {
+		return 0, "", fmt.Errorf("parse error")
+	}
+
+	name := str[start+1 : end]
+	rest := str[end+2:] // skip ") "
+	parts := strings.Fields(rest)
+	if len(parts) < 1 {
+		return 0, "", fmt.Errorf("stat format error")
+	}
+
+	ppid, err := strconv.Atoi(parts[0]) // immediately after state char is ppid
+	// Wait, stat format: pid (comm) state ppid
+	// rest starts after ") "
+	// So first char of rest is state. Next field is ppid.
+	// Example: 123 (name) S 456 ...
+	// rest = "S 456 ..."
+	// parts[0] is state ("S"), parts[1] is ppid ("456")
+
+	if len(parts) < 2 {
+		return 0, "", fmt.Errorf("stat format error")
+	}
+
+	ppid, err = strconv.Atoi(parts[1])
+	if err != nil {
+		return 0, "", err
+	}
+
+	return ppid, name, nil
 }
 
 func hasSteamAppId(pid int) bool {

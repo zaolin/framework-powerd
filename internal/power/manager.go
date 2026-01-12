@@ -8,17 +8,41 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 )
 
 // PowerManager handles power profile switching
 type PowerManager struct {
 	mu          sync.RWMutex
 	currentMode string
+
+	// State Tracking
+	isIdle        bool
+	isRemotePlay  bool
+	isGameRunning bool
+	gamePID       int
+	isGamePaused  bool
+
+	// Components
+	idleMonitor interface {
+		GetTimeUntilIdle() time.Duration
+		ResetActivity()
+	}
 }
 
 // NewPowerManager creates a new PowerManager
 func NewPowerManager() *PowerManager {
 	return &PowerManager{}
+}
+
+// SetIdleMonitor registers the idle monitor for status reporting
+func (pm *PowerManager) SetIdleMonitor(im interface {
+	GetTimeUntilIdle() time.Duration
+	ResetActivity()
+}) {
+	pm.mu.Lock()
+	defer pm.mu.Unlock()
+	pm.idleMonitor = im
 }
 
 // ValidateTools checks if required external tools are available
@@ -45,24 +69,52 @@ func (pm *PowerManager) ValidateTools() error {
 	return nil
 }
 
-// IsHDMIConnected checks if any HDMI port is connected
-func (pm *PowerManager) IsHDMIConnected() (bool, error) {
-	// Find HDMI status file
-	matches, err := filepath.Glob("/sys/class/drm/card*-HDMI-A-1/status")
-	if err != nil {
-		return false, err
-	}
-	if len(matches) == 0 {
-		return false, fmt.Errorf("no HDMI status file found")
+// SetState updates the tracking state for API reporting
+func (pm *PowerManager) SetState(idle, remote, game bool, pid int, paused bool) {
+	pm.mu.Lock()
+	defer pm.mu.Unlock()
+	pm.isIdle = idle
+	pm.isRemotePlay = remote
+	pm.isGameRunning = game
+	pm.gamePID = pid
+	pm.isGamePaused = paused
+}
+
+// Status represents the power manager state
+type Status struct {
+	Mode             string  `json:"mode"`
+	IsIdle           bool    `json:"is_idle"`
+	IsRemotePlay     bool    `json:"is_remote_play"`
+	IsGameRunning    bool    `json:"is_game_running"`
+	GamePID          int     `json:"game_pid"`
+	IsGamePaused     bool    `json:"is_game_paused"`
+	SecondsUntilIdle float64 `json:"seconds_until_idle"`
+}
+
+// GetStatus returns the current status
+func (pm *PowerManager) GetStatus() Status {
+	pm.mu.RLock()
+	defer pm.mu.RUnlock()
+
+	var secondsUntilIdle float64
+	if pm.idleMonitor != nil {
+		secondsUntilIdle = pm.idleMonitor.GetTimeUntilIdle().Seconds()
 	}
 
-	content, err := os.ReadFile(matches[0])
-	if err != nil {
-		return false, err
+	return Status{
+		Mode:             pm.currentMode,
+		IsIdle:           pm.isIdle,
+		IsRemotePlay:     pm.isRemotePlay,
+		IsGameRunning:    pm.isGameRunning,
+		GamePID:          pm.gamePID,
+		IsGamePaused:     pm.isGamePaused,
+		SecondsUntilIdle: secondsUntilIdle,
 	}
+}
 
-	status := strings.TrimSpace(string(content))
-	return status == "connected", nil
+// SetDefaultActive sets the default active mode (Performance) when no specific game or remote play is detected but the system is not idle.
+func (pm *PowerManager) SetDefaultActive() error {
+	return pm.SetPerformance("Active Usage")
 }
 
 // SetPerformance enables performance mode
@@ -139,23 +191,6 @@ func (pm *PowerManager) SetPowersave(reason string) error {
 	return nil
 }
 
-// AutoDetect checks HDMI status and sets the appropriate mode
-func (pm *PowerManager) AutoDetect() error {
-	connected, err := pm.IsHDMIConnected()
-	if err != nil {
-		// Fallback or log error. For now, log and assume disconnected?
-		// Or maybe don't change anything?
-		// Let's assume disconnected if we can't find it, or just log.
-		log.Printf("Error checking HDMI status: %v. Assuming disconnected.\n", err)
-		connected = false
-	}
-
-	if connected {
-		return pm.SetPerformance("HDMI Detected")
-	}
-	return pm.SetPowersave("HDMI Disconnected")
-}
-
 // GetCurrentMode returns the currently active mode
 func (pm *PowerManager) GetCurrentMode() string {
 	pm.mu.RLock()
@@ -225,5 +260,14 @@ func setASPM(policy string) {
 	path := "/sys/module/pcie_aspm/parameters/policy"
 	if _, err := os.Stat(path); err == nil {
 		os.WriteFile(path, []byte(policy), 0644)
+	}
+}
+
+// TriggerActivity manually resets the idle timer
+func (pm *PowerManager) TriggerActivity() {
+	pm.mu.RLock()
+	defer pm.mu.RUnlock()
+	if pm.idleMonitor != nil {
+		pm.idleMonitor.ResetActivity()
 	}
 }
