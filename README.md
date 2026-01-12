@@ -1,5 +1,3 @@
-# Framework Power Daemon
-
 ![Framework Power Daemon Logo](docs/logo.png)
 
 A Go daemon to automatically manage power profiles on the **Framework Desktop**, specifically tailored for hybrid setups acting as both a **Steam Gaming Console** and an **AI Server**.
@@ -23,6 +21,8 @@ A Go daemon to automatically manage power profiles on the **Framework Desktop**,
 
 The daemon operates by listening to multiple sources of input: Kernel Udev events (HDMI), Input Devices (Activity), Steam Processes, and Virtual Devices (Remote Play).
 
+```mermaid
+graph TD
     subgraph Sources [Input Sources]
         Input[Raw Input Monitor]
         Steam[Steam Process Check]
