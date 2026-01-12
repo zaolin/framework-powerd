@@ -1,5 +1,7 @@
 # Framework Power Daemon
 
+![Framework Power Daemon Logo](docs/logo.png)
+
 A Go daemon to automatically manage power profiles on the **Framework Desktop**, specifically tailored for hybrid setups acting as both a **Steam Gaming Console** and an **AI Server**.
 
 > [!IMPORTANT]
