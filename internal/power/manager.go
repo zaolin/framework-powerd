@@ -48,7 +48,7 @@ func (pm *PowerManager) SetIdleMonitor(im interface {
 // ValidateTools checks if required external tools are available
 func (pm *PowerManager) ValidateTools() error {
 	required := []string{"powerprofilesctl"}
-	optional := []string{"scxctl", "powertop"}
+	optional := []string{"scxctl", "powertop", "iw"}
 
 	var missing []string
 	for _, tool := range required {
@@ -82,13 +82,20 @@ func (pm *PowerManager) SetState(idle, remote, game bool, pid int, paused bool) 
 
 // Status represents the power manager state
 type Status struct {
-	Mode             string  `json:"mode"`
-	IsIdle           bool    `json:"is_idle"`
-	IsRemotePlay     bool    `json:"is_remote_play"`
-	IsGameRunning    bool    `json:"is_game_running"`
-	GamePID          int     `json:"game_pid"`
-	IsGamePaused     bool    `json:"is_game_paused"`
-	SecondsUntilIdle float64 `json:"seconds_until_idle"`
+	Mode             string                `json:"mode"`
+	IsIdle           bool                  `json:"is_idle"`
+	IsRemotePlay     bool                  `json:"is_remote_play"`
+	IsGameRunning    bool                  `json:"is_game_running"`
+	GamePID          int                   `json:"game_pid"`
+	IsGamePaused     bool                  `json:"is_game_paused"`
+	SecondsUntilIdle float64               `json:"seconds_until_idle"`
+	NetworkDevices   []NetworkDeviceStatus `json:"network_devices"`
+}
+
+// NetworkDeviceStatus represents the power status of a network interface
+type NetworkDeviceStatus struct {
+	Interface    string `json:"interface"`
+	PowerControl string `json:"power_control"` // "on" or "auto" (or "unknown")
 }
 
 // GetStatus returns the current status
@@ -109,7 +116,37 @@ func (pm *PowerManager) GetStatus() Status {
 		GamePID:          pm.gamePID,
 		IsGamePaused:     pm.isGamePaused,
 		SecondsUntilIdle: secondsUntilIdle,
+		NetworkDevices:   pm.getNetworkDeviceStatus(),
 	}
+}
+
+func (pm *PowerManager) getNetworkDeviceStatus() []NetworkDeviceStatus {
+	var statuses []NetworkDeviceStatus
+	matches, _ := filepath.Glob("/sys/class/net/*")
+	for _, ifacePath := range matches {
+		ifaceName := filepath.Base(ifacePath)
+		// Skip loopback & virtual devices (no 'device' symlink)
+		if ifaceName == "lo" {
+			continue
+		}
+		if _, err := os.Stat(filepath.Join(ifacePath, "device")); os.IsNotExist(err) {
+			continue
+		}
+
+		// Check device/power/control
+		ctrlPath := filepath.Join(ifacePath, "device", "power", "control")
+		content, err := os.ReadFile(ctrlPath)
+		state := "unknown"
+		if err == nil {
+			state = strings.TrimSpace(string(content))
+		}
+
+		statuses = append(statuses, NetworkDeviceStatus{
+			Interface:    ifaceName,
+			PowerControl: state,
+		})
+	}
+	return statuses
 }
 
 // SetDefaultActive sets the default active mode (Performance) when no specific game or remote play is detected but the system is not idle.
@@ -188,6 +225,9 @@ func (pm *PowerManager) SetPowersave(reason string) error {
 	// 5. Powertop -> Max Savings
 	pm.enablePowertopTune()
 
+	// 6. Exclude Network Devices (Stability)
+	pm.disableNetworkPowerSave()
+
 	return nil
 }
 
@@ -204,6 +244,36 @@ func (pm *PowerManager) enablePowertopTune() {
 	if commandExists("powertop") {
 		if err := runCommand("powertop", "--auto-tune"); err != nil {
 			log.Printf("Error running powertop: %v\n", err)
+		}
+	}
+}
+
+// disableNetworkPowerSave forces 'on' for network devices to prevent connection drops (e.g. mt7925)
+func (pm *PowerManager) disableNetworkPowerSave() {
+	log.Println("  -> Disabling Power Save for Network Devices...")
+	matches, _ := filepath.Glob("/sys/class/net/*")
+	for _, ifacePath := range matches {
+		if filepath.Base(ifacePath) == "lo" {
+			continue
+		}
+		// Skip virtual devices (check if 'device' symlink exists)
+		if _, err := os.Stat(filepath.Join(ifacePath, "device")); os.IsNotExist(err) {
+			continue
+		}
+
+		// Write "on" to device/power/control
+		ctrlPath := filepath.Join(ifacePath, "device", "power", "control")
+		if err := os.WriteFile(ctrlPath, []byte("on"), 0644); err != nil {
+			// log.Printf("Failed to set power on for %s: %v", filepath.Base(ifacePath), err)
+		}
+
+		// Use iw for wireless interfaces
+		// Try to run iw dev <iface> set power_save off
+		// We don't strictly check if it's wireless, just try running it.
+		// iw will fail harmlessly on non-wireless interfaces or if iw is missing.
+		if commandExists("iw") {
+			// Ignore output/errors as it might be ethernet
+			exec.Command("iw", "dev", filepath.Base(ifacePath), "set", "power_save", "off").Run()
 		}
 	}
 }

@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/zaolin/framework-powerd/internal/ollama"
 	"github.com/zaolin/framework-powerd/internal/power"
 
 	"github.com/golang-jwt/jwt/v5"
@@ -14,30 +15,34 @@ import (
 
 // StatusResponse represents the system status
 type StatusResponse struct {
-	Mode             string            `json:"mode"`
-	IsIdle           bool              `json:"is_idle"`
-	SecondsUntilIdle int               `json:"seconds_until_idle"`
-	IsGamePaused     bool              `json:"is_game_paused"`
-	IsRemotePlay     bool              `json:"is_remote_play"`
-	GamePID          int               `json:"game_pid"`
-	Uptime           string            `json:"uptime"`
-	UptimeSeconds    float64           `json:"uptime_seconds"`
-	Power            power.PowerStatus `json:"power"`
+	Mode             string                      `json:"mode"`
+	IsIdle           bool                        `json:"is_idle"`
+	SecondsUntilIdle int                         `json:"seconds_until_idle"`
+	IsGamePaused     bool                        `json:"is_game_paused"`
+	IsRemotePlay     bool                        `json:"is_remote_play"`
+	GamePID          int                         `json:"game_pid"`
+	Uptime           string                      `json:"uptime"`
+	UptimeSeconds    float64                     `json:"uptime_seconds"`
+	Power            power.PowerStatus           `json:"power"`
+	NetworkDevices   []power.NetworkDeviceStatus `json:"network_devices"`
+	Ollama           *ollama.Stats               `json:"ollama,omitempty"`
 }
 
 // Server handles API requests
 type Server struct {
-	pm           *power.PowerManager
-	powerMonitor *power.PowerMonitor
-	jwtSecret    []byte
+	pm            *power.PowerManager
+	powerMonitor  *power.PowerMonitor
+	ollamaMonitor *ollama.Monitor
+	jwtSecret     []byte
 }
 
 // NewServer creates a new API server
-func NewServer(pm *power.PowerManager, monitor *power.PowerMonitor, jwtSecret string) *Server {
+func NewServer(pm *power.PowerManager, monitor *power.PowerMonitor, jwtSecret string, ollamaMon *ollama.Monitor) *Server {
 	return &Server{
-		pm:           pm,
-		powerMonitor: monitor,
-		jwtSecret:    []byte(jwtSecret),
+		pm:            pm,
+		powerMonitor:  monitor,
+		ollamaMonitor: ollamaMon,
+		jwtSecret:     []byte(jwtSecret),
 	}
 }
 
@@ -133,6 +138,13 @@ func (s *Server) HandleStatus(w http.ResponseWriter, r *http.Request) {
 		Uptime:           power.GetUptime(),
 		UptimeSeconds:    power.GetUptimeSeconds(),
 		Power:            s.powerMonitor.GetStatus(),
+		NetworkDevices:   status.NetworkDevices,
+	}
+
+	// Include Ollama stats if enabled
+	if s.ollamaMonitor != nil {
+		stats := s.ollamaMonitor.GetStats()
+		resp.Ollama = &stats
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -150,4 +162,15 @@ func (s *Server) HandleActivity(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	json.NewEncoder(w).Encode(map[string]string{"message": "Activity triggered, idle timer reset"})
+}
+
+// HandleOllamaStats returns Ollama usage statistics
+func (s *Server) HandleOllamaStats(w http.ResponseWriter, r *http.Request) {
+	if s.ollamaMonitor == nil {
+		http.Error(w, "Ollama monitoring not enabled", http.StatusNotFound)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(s.ollamaMonitor.GetStats())
 }

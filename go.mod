@@ -8,4 +8,7 @@ require (
 	github.com/golang-jwt/jwt/v5 v5.3.0
 )
 
-require golang.org/x/sys v0.40.0 // indirect
+require (
+	github.com/coreos/go-systemd/v22 v22.6.0 // indirect
+	golang.org/x/sys v0.40.0 // indirect
+)

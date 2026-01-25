@@ -55,7 +55,7 @@ class FrameworkPowerCoordinator(DataUpdateCoordinator):
         self.host = host
         self.port = port
         self.token = token
-        self.url = f"http://{host}:{port}/status"
+        self.base_url = f"http://{host}:{port}"
         self.headers = {}
         if token:
             self.headers["Authorization"] = f"Bearer {token}"
@@ -68,13 +68,29 @@ class FrameworkPowerCoordinator(DataUpdateCoordinator):
         )
 
     async def _async_update_data(self):
-        """Fetch data from API endpoint."""
+        """Fetch data from API endpoints."""
         try:
-            async with async_timeout.timeout(5):
+            async with async_timeout.timeout(10):
                 async with aiohttp.ClientSession() as session:
-                    async with session.get(self.url, headers=self.headers) as response:
+                    # Fetch main status
+                    async with session.get(
+                        f"{self.base_url}/status", headers=self.headers
+                    ) as response:
                         if response.status != 200:
-                            raise UpdateFailed(f"Error fetching data: {response.status}")
-                        return await response.json()
+                            raise UpdateFailed(f"Error fetching status: {response.status}")
+                        data = await response.json()
+
+                    # Fetch Ollama stats (optional, may not be enabled)
+                    try:
+                        async with session.get(
+                            f"{self.base_url}/ollama/stats", headers=self.headers
+                        ) as response:
+                            if response.status == 200:
+                                data["ollama"] = await response.json()
+                    except Exception:
+                        pass  # Ollama monitoring not enabled
+
+                    return data
         except Exception as err:
             raise UpdateFailed(f"Error communicating with API: {err}")
+

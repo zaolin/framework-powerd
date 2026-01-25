@@ -15,13 +15,16 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 
 	"github.com/zaolin/framework-powerd/internal/api"
+	"github.com/zaolin/framework-powerd/internal/config"
 	"github.com/zaolin/framework-powerd/internal/detector"
 	"github.com/zaolin/framework-powerd/internal/monitor"
+	"github.com/zaolin/framework-powerd/internal/ollama"
 	"github.com/zaolin/framework-powerd/internal/power"
 )
 
 var CLI struct {
 	Serve struct {
+		Config      string        `help:"Path to config file" type:"path" name:"config" short:"c"`
 		Port        int           `help:"Port to listen on" default:"8080"`
 		Address     string        `help:"Address to listen on" default:"localhost"`
 		JWTSecret   string        `help:"Secret key for JWT authentication" env:"JWT_SECRET" name:"jwt-secret"`
@@ -71,6 +74,26 @@ func generateToken() {
 }
 
 func runServer() {
+	// Load configuration
+	cfg, err := config.Load(CLI.Serve.Config)
+	if err != nil {
+		log.Fatalf("Failed to load config: %v", err)
+	}
+
+	// CLI flags override config file
+	if CLI.Serve.Address != "localhost" {
+		cfg.Server.Address = CLI.Serve.Address
+	}
+	if CLI.Serve.Port != 8080 {
+		cfg.Server.Port = CLI.Serve.Port
+	}
+	if CLI.Serve.JWTSecret != "" {
+		cfg.Server.JWTSecret = CLI.Serve.JWTSecret
+	}
+	if CLI.Serve.IdleTimeout != 5*time.Minute {
+		cfg.Server.IdleTimeout = CLI.Serve.IdleTimeout.String()
+	}
+
 	pm := power.NewPowerManager()
 
 	if err := pm.ValidateTools(); err != nil {
@@ -254,9 +277,23 @@ func runServer() {
 	// Run turbostat in background
 	go powerMon.Start(pwrCtx)
 
+	// Start Ollama Monitor (if enabled)
+	var ollamaMonitor *ollama.Monitor
+	if cfg.Ollama.Enabled {
+		log.Println("Ollama monitoring enabled")
+		ollamaMonitor = ollama.NewMonitor(pm, powerMon, cfg.Ollama, cfg.Pricing)
+		ollamaCtx, ollamaCancel := context.WithCancel(context.Background())
+		defer ollamaCancel()
+		go func() {
+			if err := ollamaMonitor.Start(ollamaCtx); err != nil && ollamaCtx.Err() == nil {
+				log.Printf("Ollama monitor error: %v", err)
+			}
+		}()
+	}
+
 	// Start API Server
-	jwtSecret := strings.TrimSpace(CLI.Serve.JWTSecret)
-	apiServer := api.NewServer(pm, powerMon, jwtSecret)
+	jwtSecret := strings.TrimSpace(cfg.Server.JWTSecret)
+	apiServer := api.NewServer(pm, powerMon, jwtSecret, ollamaMonitor)
 
 	// Apply middleware if secret is set
 	if jwtSecret != "" {
@@ -264,18 +301,20 @@ func runServer() {
 		http.HandleFunc("/mode", apiServer.AuthMiddleware(apiServer.HandleMode))
 		http.HandleFunc("/status", apiServer.AuthMiddleware(apiServer.HandleStatus))
 		http.HandleFunc("/activity", apiServer.AuthMiddleware(apiServer.HandleActivity))
+		http.HandleFunc("/ollama/stats", apiServer.AuthMiddleware(apiServer.HandleOllamaStats))
 	} else {
 		log.Println("Warning: JWT Authentication disabled (no secret provided)")
 		http.HandleFunc("/mode", apiServer.HandleMode)
 		http.HandleFunc("/status", apiServer.HandleStatus)
 		http.HandleFunc("/activity", apiServer.HandleActivity)
+		http.HandleFunc("/ollama/stats", apiServer.HandleOllamaStats)
 	}
 
 	stop := make(chan os.Signal, 1)
 	signal.Notify(stop, syscall.SIGINT, syscall.SIGTERM)
 
 	go func() {
-		addr := fmt.Sprintf("%s:%d", CLI.Serve.Address, CLI.Serve.Port)
+		addr := fmt.Sprintf("%s:%d", cfg.Server.Address, cfg.Server.Port)
 		log.Printf("Listening on %s...\n", addr)
 		if err := http.ListenAndServe(addr, nil); err != nil {
 			log.Fatalf("HTTP server error: %v", err)

@@ -13,8 +13,10 @@ A Go daemon to automatically manage power profiles on the **Framework Desktop**,
 - **Idle Detection**: Monitors raw input activity (default 5-minute timeout). Support for **Joystick Deadzones** and **Event Deduplication** to prevent drift.
 - **Game Pausing**: Recursively pauses the entire process tree of a Steam game (including Proton/Wine wrappers) when idle. **Syncs state** on startup to prevent conflicts.
 - **Steam Remote Play Detection**: Detects virtual input devices from Remote Play (specifically `js` interfaces) to keep the system active.
-- **REST API**: Allows manual mode overriding and idle resetting.
+- **Ollama Usage Monitoring**: Tracks API usage per IP/group with cost accounting (energy × €/kWh) via journald log parsing.
+- **REST API**: Allows manual mode overriding, idle resetting, and Ollama usage statistics.
 - **JWT Authentication**: Secure API access with JSON Web Tokens.
+- **Configuration File**: JSON-based daemon configuration.
 - **Systemd Integration**: Runs effectively as a background service.
 
 ## Architecture & Flow
@@ -28,6 +30,7 @@ graph TD
         Steam[Steam Process Check]
         Remote[Virtual Joystick Check]
         Turbo[Turbostat Power Monitor]
+        Ollama[Ollama Log Monitor]
         API[User API]
     end
 
@@ -44,12 +47,14 @@ graph TD
     Steam -->|Game PID| Main
     Remote -->|Virtual Device| Main
     Turbo -->|Power/Energy Stats| Main
+    Ollama -->|Usage/Cost Stats| Main
     API -->|Override/Activity| Main
 
     Main -->|Set Profile| PCTL
     Main -->|SIGSTOP/SIGCONT| Pauser
     Input -.->|fsnotify| Hotplug[Device Hotplug]
     Hotplug --> Input
+    Ollama -.->|journald| Journal[systemd Journal]
 ```
 
 ## Power Monitoring
@@ -63,6 +68,10 @@ The daemon uses `turbostat` to provide accurate, real-time power consumption met
     *   **RAM**: Memory power.
 *   **Total Energy**: Calculated as the **SUM** of `PkgWatt` + `CorWatt` + `RAMWatt` to account for all reported sensors as requested.
 *   **History**: Tracks 24-hour and 7-day rolling energy consumption in **kWh**.
+
+## Network Device Stability
+
+Network devices (Wi-Fi and Ethernet) are explicitly excluded from Runtime Power Management (forced to `on`) to prevent connection drops and instability. This is particularly important for chipsets like the **MediaTek MT7925 (Wi-Fi 7)** which are known to be unstable with `powertop --auto-tune` or aggressive ASPM. The status of these devices can be verified via the `/status` API endpoint.
 
 ## Power State Flow
 
@@ -113,6 +122,7 @@ The daemon relies on the following tools:
 
 - `powerprofilesctl`: For changing system power profiles.
 - `turbostat`: For accurate power monitoring (usually part of `linux-tools` or `linux-cpupower`).
+- `libsystemd-dev`: Required for building (Ollama journald integration uses cgo).
 - `powertop` (Optional): For auto-tuning power parameters.
 - `scxctl` (Optional): For sched-ext scheduler management.
 
@@ -182,6 +192,10 @@ This project is compatible with [HACS](https://hacs.xyz/) (Home Assistant Commun
 *   **Energy Consumption**: Last 24h & 7 Days (kWh, Sum of Pkg+Cor+RAM)
 *   **Uptime**: System uptime (duration)
 *   **Polling Interval**: Configurable number entity (seconds)
+*   **Ollama Per-Group** (if enabled):
+    *   Requests count
+    *   Energy consumption (kWh)
+    *   Cost (€ or configured currency)
 
 ### API Control
 
@@ -210,7 +224,12 @@ export TOKEN="your_jwt_token_here"
 - **Get Status**:
   ```bash
   curl -H "Authorization: Bearer $TOKEN" http://localhost:8080/status
-  # Output: {"mode":"powersave","is_idle":true,"seconds_until_idle":0,"is_game_paused":true,...}
+  ```
+
+- **Get Ollama Stats** (if enabled):
+  ```bash
+  curl -H "Authorization: Bearer $TOKEN" http://localhost:8080/ollama/stats
+  # Output: {"by_ip":{...},"by_group":{"lan":{"count":5,"total_cost":0.0012},...}}
   ```
 
 ### Authentication
@@ -236,16 +255,38 @@ curl -H "Authorization: Bearer $TOKEN" http://localhost:8080/status
 
 ## Configuration
 
-You can configure the listening address and port using CLI flags with the `serve` command.
+The daemon supports a JSON configuration file. Create `/etc/framework-powerd/config.json`:
 
+```json
+{
+  "server": {
+    "address": "0.0.0.0",
+    "port": 8080,
+    "idle_timeout": "5m"
+  },
+  "ollama": {
+    "enabled": true,
+    "service_unit": "ollama.service",
+    "groups": [
+      {"name": "lan", "cidrs": ["192.168.0.0/16"]},
+      {"name": "tailscale", "cidrs": ["100.64.0.0/10"]}
+    ]
+  },
+  "pricing": {
+    "energy_price_per_kwh": 0.32,
+    "currency": "EUR"
+  }
+}
+```
+
+Run with config:
+```bash
+/usr/local/bin/framework-powerd serve --config=/etc/framework-powerd/config.json
+```
+
+CLI flags override config file values:
 - `--address`: The IP address to listen on (default: `localhost`). Use `0.0.0.0` to listen on all interfaces.
 - `--port`: The port to listen on (default: `8080`).
 
-Example:
-```bash
-/usr/local/bin/framework-powerd serve --address=0.0.0.0 --port=9090
-```
-
-> **Note**: If you change the port or address, remember to update your API calls (e.g., `curl`) accordingly.
-
+> **Note**: If you change the port or address, remember to update your API calls accordingly.
 
