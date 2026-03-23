@@ -9,6 +9,7 @@ import (
 
 	"github.com/zaolin/framework-powerd/internal/ollama"
 	"github.com/zaolin/framework-powerd/internal/power"
+	"github.com/zaolin/framework-powerd/internal/smartd"
 
 	"github.com/golang-jwt/jwt/v5"
 )
@@ -26,6 +27,7 @@ type StatusResponse struct {
 	Power            power.PowerStatus           `json:"power"`
 	NetworkDevices   []power.NetworkDeviceStatus `json:"network_devices"`
 	Ollama           *ollama.Stats               `json:"ollama,omitempty"`
+	Smartd           *smartd.Stats               `json:"smartd,omitempty"`
 }
 
 // Server handles API requests
@@ -33,15 +35,17 @@ type Server struct {
 	pm            *power.PowerManager
 	powerMonitor  *power.PowerMonitor
 	ollamaMonitor *ollama.Monitor
+	smartdMonitor *smartd.Monitor
 	jwtSecret     []byte
 }
 
 // NewServer creates a new API server
-func NewServer(pm *power.PowerManager, monitor *power.PowerMonitor, jwtSecret string, ollamaMon *ollama.Monitor) *Server {
+func NewServer(pm *power.PowerManager, monitor *power.PowerMonitor, jwtSecret string, ollamaMon *ollama.Monitor, smartdMon *smartd.Monitor) *Server {
 	return &Server{
 		pm:            pm,
 		powerMonitor:  monitor,
 		ollamaMonitor: ollamaMon,
+		smartdMonitor: smartdMon,
 		jwtSecret:     []byte(jwtSecret),
 	}
 }
@@ -147,6 +151,12 @@ func (s *Server) HandleStatus(w http.ResponseWriter, r *http.Request) {
 		resp.Ollama = &stats
 	}
 
+	// Include Smartd stats if enabled
+	if s.smartdMonitor != nil {
+		stats := s.smartdMonitor.GetStats()
+		resp.Smartd = &stats
+	}
+
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(resp)
 }
@@ -173,4 +183,15 @@ func (s *Server) HandleOllamaStats(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(s.ollamaMonitor.GetStats())
+}
+
+// HandleSmartdStats returns SMART health statistics
+func (s *Server) HandleSmartdStats(w http.ResponseWriter, r *http.Request) {
+	if s.smartdMonitor == nil {
+		http.Error(w, "Smartd monitoring not enabled", http.StatusNotFound)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(s.smartdMonitor.GetStats())
 }

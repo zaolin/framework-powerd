@@ -23,6 +23,7 @@ async def async_setup_entry(
         RemotePlayBinarySensor(coordinator),
         GameRunningBinarySensor(coordinator),
         GamePausedBinarySensor(coordinator),
+        SmartdAlertBinarySensor(coordinator),
     ]
 
     async_add_entities(entities)
@@ -77,3 +78,13 @@ class GamePausedBinarySensor(FrameworkEntity, BinarySensorEntity):
     @property
     def is_on(self):
         return self.coordinator.data.get("is_game_paused")
+
+class SmartdAlertBinarySensor(FrameworkEntity, BinarySensorEntity):
+    _attr_name = "SMART Alert"
+    _attr_unique_id = "smartd_alert"
+    _attr_device_class = BinarySensorDeviceClass.PROBLEM
+
+    @property
+    def is_on(self):
+        alerts = self.coordinator.data.get("smartd", {}).get("alerts", [])
+        return len(alerts) > 0

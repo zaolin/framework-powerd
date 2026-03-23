@@ -58,6 +58,16 @@ async def async_setup_entry(
             OllamaGroupCostSensor(coordinator, "ungrouped", currency),
         ])
 
+    # Add SMART sensors
+    entities.append(SmartdAlertsSensor(coordinator))
+
+    # Add per-device SMART sensors dynamically based on active alerts
+    smartd_data = coordinator.data.get("smartd", {})
+    for alert in smartd_data.get("alerts", []):
+        device = alert.get("device")
+        if device:
+            entities.append(SmartdDeviceSensor(coordinator, device))
+
     async_add_entities(entities)
 
 
@@ -209,4 +219,46 @@ class OllamaGroupCostSensor(FrameworkEntity, SensorEntity):
         else:
             val = ollama.get("by_group", {}).get(self._group, {}).get("total_cost", 0)
         return round(val, 4)
+
+
+# SMART Sensors
+
+class SmartdAlertsSensor(FrameworkEntity, SensorEntity):
+    """SMART alerts count sensor."""
+    _attr_name = "SMART Alerts"
+    _attr_icon = "mdi:alert"
+    _attr_unique_id = "smartd_alerts_count"
+
+    @property
+    def native_value(self):
+        alerts = self.coordinator.data.get("smartd", {}).get("alerts", [])
+        return len(alerts)
+
+    @property
+    def extra_state_attributes(self):
+        return {"alerts": self.coordinator.data.get("smartd", {}).get("alerts", [])}
+
+
+class SmartdDeviceSensor(FrameworkEntity, SensorEntity):
+    """Per-device SMART alert sensor."""
+    _attr_icon = "mdi:harddisk"
+
+    def __init__(self, coordinator, device_name):
+        super().__init__(coordinator)
+        self._device = device_name
+        self._attr_name = f"SMART {device_name}"
+        self._attr_unique_id = f"smartd_{device_name.replace('/', '_')}"
+
+    @property
+    def native_value(self):
+        alerts = self.coordinator.data.get("smartd", {}).get("alerts", [])
+        if any(a.get("device") == self._device for a in alerts):
+            return 1
+        return 0
+
+    @property
+    def extra_state_attributes(self):
+        alerts = self.coordinator.data.get("smartd", {}).get("alerts", [])
+        device_alerts = [a for a in alerts if a.get("device") == self._device]
+        return {"alerts": device_alerts}
 

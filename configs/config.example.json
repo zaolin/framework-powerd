@@ -13,6 +13,12 @@
       {"name": "tailscale", "cidrs": ["100.64.0.0/10"]}
     ]
   },
+  "smartd": {
+    "enabled": true,
+    "service_unit": "smartd.service",
+    "notify_service": "notify.mobile_phone",
+    "alert_retention": "30s"
+  },
   "pricing": {
     "energy_price_per_kwh": 0.32,
     "currency": "EUR"

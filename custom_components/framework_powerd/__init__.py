@@ -27,8 +27,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     host = entry.data[CONF_HOST]
     port = entry.data[CONF_PORT]
     token = entry.data.get(CONF_TOKEN)
+    notify_service = entry.data.get(CONF_NOTIFY_SERVICE)
 
-    coordinator = FrameworkPowerCoordinator(hass, host, port, token)
+    coordinator = FrameworkPowerCoordinator(hass, host, port, token, notify_service)
 
     await coordinator.async_config_entry_first_refresh()
 
@@ -50,11 +51,12 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 class FrameworkPowerCoordinator(DataUpdateCoordinator):
     """Class to manage fetching data from the API."""
 
-    def __init__(self, hass, host, port, token):
+    def __init__(self, hass, host, port, token, notify_service=None):
         """Initialize."""
         self.host = host
         self.port = port
         self.token = token
+        self.notify_service = notify_service
         self.base_url = f"http://{host}:{port}"
         self.headers = {}
         if token:

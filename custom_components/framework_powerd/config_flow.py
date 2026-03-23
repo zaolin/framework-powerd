@@ -7,7 +7,7 @@ from homeassistant import config_entries
 from homeassistant.const import CONF_HOST, CONF_PORT, CONF_TOKEN, CONF_NAME
 import homeassistant.helpers.config_validation as cv
 
-from .const import DOMAIN, DEFAULT_HOST, DEFAULT_PORT, DEFAULT_NAME
+from .const import DOMAIN, DEFAULT_HOST, DEFAULT_PORT, DEFAULT_NAME, CONF_NOTIFY_SERVICE
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -17,6 +17,7 @@ STATUS_SCHEMA = vol.Schema(
         vol.Required(CONF_HOST, default=DEFAULT_HOST): str,
         vol.Required(CONF_PORT, default=DEFAULT_PORT): int,
         vol.Optional(CONF_TOKEN): str,
+        vol.Optional(CONF_NOTIFY_SERVICE): str,
     }
 )
 

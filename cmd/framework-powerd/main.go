@@ -20,6 +20,7 @@ import (
 	"github.com/zaolin/framework-powerd/internal/monitor"
 	"github.com/zaolin/framework-powerd/internal/ollama"
 	"github.com/zaolin/framework-powerd/internal/power"
+	"github.com/zaolin/framework-powerd/internal/smartd"
 )
 
 var CLI struct {
@@ -291,9 +292,27 @@ func runServer() {
 		}()
 	}
 
+	// Start Smartd Monitor (if enabled)
+	var smartdMonitor *smartd.Monitor
+	if cfg.Smartd.Enabled {
+		log.Println("Smartd monitoring enabled")
+		smartdMonitor = smartd.NewMonitor(cfg.Smartd)
+		smartdCtx, smartdCancel := context.WithCancel(context.Background())
+		defer smartdCancel()
+		go func() {
+			if err := smartdMonitor.Start(smartdCtx); err != nil {
+				if smartdCtx.Err() == context.Canceled {
+					log.Printf("[SmartdMonitor] Shutdown complete")
+				} else {
+					log.Printf("[SmartdMonitor] Error: %v", err)
+				}
+			}
+		}()
+	}
+
 	// Start API Server
 	jwtSecret := strings.TrimSpace(cfg.Server.JWTSecret)
-	apiServer := api.NewServer(pm, powerMon, jwtSecret, ollamaMonitor)
+	apiServer := api.NewServer(pm, powerMon, jwtSecret, ollamaMonitor, smartdMonitor)
 
 	// Apply middleware if secret is set
 	if jwtSecret != "" {
@@ -302,12 +321,14 @@ func runServer() {
 		http.HandleFunc("/status", apiServer.AuthMiddleware(apiServer.HandleStatus))
 		http.HandleFunc("/activity", apiServer.AuthMiddleware(apiServer.HandleActivity))
 		http.HandleFunc("/ollama/stats", apiServer.AuthMiddleware(apiServer.HandleOllamaStats))
+		http.HandleFunc("/smartd/stats", apiServer.AuthMiddleware(apiServer.HandleSmartdStats))
 	} else {
 		log.Println("Warning: JWT Authentication disabled (no secret provided)")
 		http.HandleFunc("/mode", apiServer.HandleMode)
 		http.HandleFunc("/status", apiServer.HandleStatus)
 		http.HandleFunc("/activity", apiServer.HandleActivity)
 		http.HandleFunc("/ollama/stats", apiServer.HandleOllamaStats)
+		http.HandleFunc("/smartd/stats", apiServer.HandleSmartdStats)
 	}
 
 	stop := make(chan os.Signal, 1)

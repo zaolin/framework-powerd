@@ -13,6 +13,7 @@ type Config struct {
 	Server  ServerConfig  `json:"server"`
 	Ollama  OllamaConfig  `json:"ollama"`
 	Pricing PricingConfig `json:"pricing"`
+	Smartd  SmartdConfig  `json:"smartd"`
 }
 
 // ServerConfig contains server settings
@@ -51,6 +52,14 @@ type PricingConfig struct {
 	Currency          string  `json:"currency"`
 }
 
+// SmartdConfig contains smartd monitoring settings
+type SmartdConfig struct {
+	Enabled        bool   `json:"enabled"`
+	ServiceUnit    string `json:"service_unit"`
+	NotifyService  string `json:"notify_service"`
+	AlertRetention string `json:"alert_retention"`
+}
+
 // DefaultConfig returns the default configuration
 func DefaultConfig() *Config {
 	return &Config{
@@ -66,6 +75,11 @@ func DefaultConfig() *Config {
 		Pricing: PricingConfig{
 			EnergyPricePerKWh: 0.30,
 			Currency:          "EUR",
+		},
+		Smartd: SmartdConfig{
+			Enabled:        false,
+			ServiceUnit:    "smartd.service",
+			AlertRetention: "30s",
 		},
 	}
 }
