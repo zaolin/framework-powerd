@@ -41,12 +41,14 @@ func (s *RequestStats) Add(info *RequestInfo, energyKWh, cost float64) {
 
 // Stats holds the complete statistics structure
 type Stats struct {
-	ByIP        map[string]RequestStats `json:"by_ip"`
-	ByGroup     map[string]RequestStats `json:"by_group"`
-	Ungrouped   RequestStats            `json:"ungrouped"`
-	Currency    string                  `json:"currency"`
-	PricePerKWh float64                 `json:"price_per_kwh"`
-	Since       time.Time               `json:"since"`
+	ByIP            map[string]RequestStats `json:"by_ip"`
+	ByGroup         map[string]RequestStats `json:"by_group"`
+	Ungrouped       RequestStats            `json:"ungrouped"`
+	Currency        string                  `json:"currency"`
+	PricePerKWh     float64                 `json:"price_per_kwh"`
+	Since           time.Time               `json:"since"`
+	Models          []string                `json:"models"`
+	LoadedVRAMBytes int64                   `json:"loaded_vram_bytes"`
 }
 
 // NewStats creates an initialized Stats
@@ -58,5 +60,6 @@ func NewStats(pricePerKWh float64, currency string) Stats {
 		Currency:    currency,
 		PricePerKWh: pricePerKWh,
 		Since:       time.Now(),
+		Models:      []string{},
 	}
 }

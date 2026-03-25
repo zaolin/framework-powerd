@@ -68,6 +68,24 @@ async def async_setup_entry(
         if device:
             entities.append(SmartdDeviceSensor(coordinator, device))
 
+    # Add GPU sensors
+    gpu_data = coordinator.data.get("gpu", {})
+    if gpu_data:
+        entities.extend([
+            GPUTemperatureSensor(coordinator),
+            GPUPowerSensor(coordinator),
+            GPUVRAMUsedSensor(coordinator),
+            GPUVRAMTotalSensor(coordinator),
+            GPUTTGUsedSensor(coordinator),
+            GPUCPUUsageSensor(coordinator),
+        ])
+
+    # Add Ollama model sensors
+    ollama_data = coordinator.data.get("ollama", {})
+    if ollama_data.get("models"):
+        entities.append(OllamaModelsSensor(coordinator))
+        entities.append(OllamaVRAMSensor(coordinator))
+
     async_add_entities(entities)
 
 
@@ -261,4 +279,120 @@ class SmartdDeviceSensor(FrameworkEntity, SensorEntity):
         alerts = self.coordinator.data.get("smartd", {}).get("alerts", [])
         device_alerts = [a for a in alerts if a.get("device") == self._device]
         return {"alerts": device_alerts}
+
+
+# GPU Sensors
+
+class GPUTemperatureSensor(FrameworkEntity, SensorEntity):
+    """GPU temperature sensor."""
+    _attr_name = "GPU Temperature"
+    _attr_unique_id = "gpu_temperature"
+    _attr_device_class = SensorDeviceClass.TEMPERATURE
+    _attr_native_unit_of_measurement = "°C"
+    _attr_icon = "mdi:thermometer"
+
+    @property
+    def native_value(self):
+        gpu_data = self.coordinator.data.get("gpu", {})
+        return gpu_data.get("temperature_celsius")
+
+
+class GPUPowerSensor(FrameworkEntity, SensorEntity):
+    """GPU power sensor."""
+    _attr_name = "GPU Power"
+    _attr_unique_id = "gpu_power"
+    _attr_device_class = SensorDeviceClass.POWER
+    _attr_native_unit_of_measurement = UnitOfPower.WATT
+    _attr_icon = "mdi:flash"
+
+    @property
+    def native_value(self):
+        gpu_data = self.coordinator.data.get("gpu", {})
+        return gpu_data.get("power_watts")
+
+
+class GPUVRAMUsedSensor(FrameworkEntity, SensorEntity):
+    """GPU VRAM used sensor."""
+    _attr_name = "GPU VRAM Used"
+    _attr_unique_id = "gpu_vram_used"
+    _attr_device_class = SensorDeviceClass.DATA_SIZE
+    _attr_icon = "mdi:memory"
+
+    @property
+    def native_value(self):
+        gpu_data = self.coordinator.data.get("gpu", {})
+        vram_bytes = gpu_data.get("vram_used_bytes", 0)
+        return round(vram_bytes / (1024**3), 2)
+
+
+class GPUVRAMTotalSensor(FrameworkEntity, SensorEntity):
+    """GPU VRAM total sensor."""
+    _attr_name = "GPU VRAM Total"
+    _attr_unique_id = "gpu_vram_total"
+    _attr_device_class = SensorDeviceClass.DATA_SIZE
+    _attr_icon = "mdi:memory"
+
+    @property
+    def native_value(self):
+        gpu_data = self.coordinator.data.get("gpu", {})
+        vram_bytes = gpu_data.get("vram_total_bytes", 0)
+        return round(vram_bytes / (1024**3), 2)
+
+
+class GPUTTGUsedSensor(FrameworkEntity, SensorEntity):
+    """GPU GTT used sensor."""
+    _attr_name = "GPU GTT Used"
+    _attr_unique_id = "gpu_gtt_used"
+    _attr_icon = "mdi:memory"
+
+    @property
+    def native_value(self):
+        gpu_data = self.coordinator.data.get("gpu", {})
+        gtt_bytes = gpu_data.get("gtt_used_bytes", 0)
+        return round(gtt_bytes / (1024**2), 2)
+
+
+class GPUCPUUsageSensor(FrameworkEntity, SensorEntity):
+    """System CPU usage sensor."""
+    _attr_name = "CPU Usage"
+    _attr_unique_id = "cpu_usage"
+    _attr_icon = "mdi:cpu-64-bit"
+
+    @property
+    def native_value(self):
+        gpu_data = self.coordinator.data.get("gpu", {})
+        return round(gpu_data.get("cpu_usage_percent", 0), 1)
+
+
+# Ollama Model Sensors
+
+class OllamaModelsSensor(FrameworkEntity, SensorEntity):
+    """Ollama loaded models sensor."""
+    _attr_name = "Ollama Models"
+    _attr_unique_id = "ollama_models"
+    _attr_icon = "mdi:brain"
+
+    @property
+    def native_value(self):
+        models = self.coordinator.data.get("ollama", {}).get("models", [])
+        return ", ".join(models) if models else "None"
+
+    @property
+    def extra_state_attributes(self):
+        models = self.coordinator.data.get("ollama", {}).get("models", [])
+        return {"models": models}
+
+
+class OllamaVRAMSensor(FrameworkEntity, SensorEntity):
+    """Ollama VRAM usage sensor."""
+    _attr_name = "Ollama VRAM"
+    _attr_unique_id = "ollama_vram"
+    _attr_device_class = SensorDeviceClass.DATA_SIZE
+    _attr_icon = "mdi:memory"
+
+    @property
+    def native_value(self):
+        ollama = self.coordinator.data.get("ollama", {})
+        vram_bytes = ollama.get("loaded_vram_bytes", 0)
+        return round(vram_bytes / (1024**3), 2)
 

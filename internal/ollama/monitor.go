@@ -2,7 +2,9 @@ package ollama
 
 import (
 	"context"
+	"encoding/json"
 	"log"
+	"net/http"
 	"regexp"
 	"strconv"
 	"strings"
@@ -14,8 +16,19 @@ import (
 	"github.com/zaolin/framework-powerd/internal/power"
 )
 
+const (
+	ollamaAPIEndpoint = "http://localhost:11434/api/ps"
+)
+
 // GIN log regex: [GIN] 2026/01/24 - 16:57:23 | 200 | 2m36s | 100.76.21.125 | POST "/api/chat"
 var ginLogRe = regexp.MustCompile(`\[GIN\] .+ \| (\d+) \|\s+([^\s]+) \|\s+([^\s]+) \| (\w+)\s+"([^"]+)"`)
+
+type psResponse struct {
+	Models []struct {
+		Name     string `json:"name"`
+		SizeVRAM int64  `json:"size_vram"`
+	} `json:"models"`
+}
 
 // Monitor watches Ollama logs and tracks usage statistics
 type Monitor struct {
@@ -219,6 +232,9 @@ func (m *Monitor) GetStats() Stats {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
+	// Fetch current loaded models
+	m.pollLoadedModelsLocked()
+
 	// Return a copy
 	stats := m.stats
 	stats.ByIP = make(map[string]RequestStats)
@@ -230,4 +246,31 @@ func (m *Monitor) GetStats() Stats {
 		stats.ByGroup[k] = v
 	}
 	return stats
+}
+
+func (m *Monitor) pollLoadedModelsLocked() {
+	resp, err := http.Get(ollamaAPIEndpoint)
+	if err != nil {
+		return
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return
+	}
+
+	var psResp psResponse
+	if err := json.NewDecoder(resp.Body).Decode(&psResp); err != nil {
+		return
+	}
+
+	models := make([]string, 0, len(psResp.Models))
+	var totalVRAM int64
+	for _, model := range psResp.Models {
+		models = append(models, model.Name)
+		totalVRAM += model.SizeVRAM
+	}
+
+	m.stats.Models = models
+	m.stats.LoadedVRAMBytes = totalVRAM
 }

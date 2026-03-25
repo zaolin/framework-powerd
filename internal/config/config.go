@@ -14,6 +14,7 @@ type Config struct {
 	Ollama  OllamaConfig  `json:"ollama"`
 	Pricing PricingConfig `json:"pricing"`
 	Smartd  SmartdConfig  `json:"smartd"`
+	GPU     GPUConfig     `json:"gpu"`
 }
 
 // ServerConfig contains server settings
@@ -60,6 +61,12 @@ type SmartdConfig struct {
 	AlertRetention string `json:"alert_retention"`
 }
 
+// GPUConfig contains GPU monitoring settings
+type GPUConfig struct {
+	Enabled      bool   `json:"enabled"`
+	PollInterval string `json:"poll_interval"`
+}
+
 // DefaultConfig returns the default configuration
 func DefaultConfig() *Config {
 	return &Config{
@@ -80,6 +87,10 @@ func DefaultConfig() *Config {
 			Enabled:        false,
 			ServiceUnit:    "smartd.service",
 			AlertRetention: "30s",
+		},
+		GPU: GPUConfig{
+			Enabled:      false,
+			PollInterval: "5s",
 		},
 	}
 }

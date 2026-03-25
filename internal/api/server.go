@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/zaolin/framework-powerd/internal/gpu"
 	"github.com/zaolin/framework-powerd/internal/ollama"
 	"github.com/zaolin/framework-powerd/internal/power"
 	"github.com/zaolin/framework-powerd/internal/smartd"
@@ -28,6 +29,7 @@ type StatusResponse struct {
 	NetworkDevices   []power.NetworkDeviceStatus `json:"network_devices"`
 	Ollama           *ollama.Stats               `json:"ollama,omitempty"`
 	Smartd           *smartd.Stats               `json:"smartd,omitempty"`
+	GPU              *gpu.Stats                  `json:"gpu,omitempty"`
 }
 
 // Server handles API requests
@@ -36,16 +38,18 @@ type Server struct {
 	powerMonitor  *power.PowerMonitor
 	ollamaMonitor *ollama.Monitor
 	smartdMonitor *smartd.Monitor
+	gpuMonitor    *gpu.Monitor
 	jwtSecret     []byte
 }
 
 // NewServer creates a new API server
-func NewServer(pm *power.PowerManager, monitor *power.PowerMonitor, jwtSecret string, ollamaMon *ollama.Monitor, smartdMon *smartd.Monitor) *Server {
+func NewServer(pm *power.PowerManager, monitor *power.PowerMonitor, jwtSecret string, ollamaMon *ollama.Monitor, smartdMon *smartd.Monitor, gpuMon *gpu.Monitor) *Server {
 	return &Server{
 		pm:            pm,
 		powerMonitor:  monitor,
 		ollamaMonitor: ollamaMon,
 		smartdMonitor: smartdMon,
+		gpuMonitor:    gpuMon,
 		jwtSecret:     []byte(jwtSecret),
 	}
 }
@@ -155,6 +159,12 @@ func (s *Server) HandleStatus(w http.ResponseWriter, r *http.Request) {
 	if s.smartdMonitor != nil {
 		stats := s.smartdMonitor.GetStats()
 		resp.Smartd = &stats
+	}
+
+	// Include GPU stats if enabled
+	if s.gpuMonitor != nil {
+		stats := s.gpuMonitor.GetStats()
+		resp.GPU = &stats
 	}
 
 	w.Header().Set("Content-Type", "application/json")

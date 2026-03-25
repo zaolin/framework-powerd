@@ -17,6 +17,7 @@ import (
 	"github.com/zaolin/framework-powerd/internal/api"
 	"github.com/zaolin/framework-powerd/internal/config"
 	"github.com/zaolin/framework-powerd/internal/detector"
+	"github.com/zaolin/framework-powerd/internal/gpu"
 	"github.com/zaolin/framework-powerd/internal/monitor"
 	"github.com/zaolin/framework-powerd/internal/ollama"
 	"github.com/zaolin/framework-powerd/internal/power"
@@ -310,9 +311,32 @@ func runServer() {
 		}()
 	}
 
+	// Start GPU Monitor (if enabled)
+	var gpuMonitor *gpu.Monitor
+	if cfg.GPU.Enabled {
+		log.Println("GPU monitoring enabled")
+		var err error
+		gpuMonitor, err = gpu.NewMonitor(cfg.GPU)
+		if err != nil {
+			log.Printf("GPU monitor initialization failed: %v", err)
+		} else {
+			gpuCtx, gpuCancel := context.WithCancel(context.Background())
+			defer gpuCancel()
+			go func() {
+				if err := gpuMonitor.Start(gpuCtx); err != nil {
+					if gpuCtx.Err() == context.Canceled {
+						log.Printf("[GPUMonitor] Shutdown complete")
+					} else {
+						log.Printf("[GPUMonitor] Error: %v", err)
+					}
+				}
+			}()
+		}
+	}
+
 	// Start API Server
 	jwtSecret := strings.TrimSpace(cfg.Server.JWTSecret)
-	apiServer := api.NewServer(pm, powerMon, jwtSecret, ollamaMonitor, smartdMonitor)
+	apiServer := api.NewServer(pm, powerMon, jwtSecret, ollamaMonitor, smartdMonitor, gpuMonitor)
 
 	// Apply middleware if secret is set
 	if jwtSecret != "" {

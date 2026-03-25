@@ -19,7 +19,7 @@ func TestNewServer(t *testing.T) {
 	pm.SetState(false, false, false, 0, false)
 	powerMon := power.NewPowerMonitor()
 
-	server := NewServer(pm, powerMon, "", nil, nil)
+	server := NewServer(pm, powerMon, "", nil, nil, nil)
 
 	if server.pm != pm {
 		t.Error("PowerManager not set correctly")
@@ -37,7 +37,7 @@ func TestNewServer_WithJWT(t *testing.T) {
 	powerMon := power.NewPowerMonitor()
 
 	secret := "test-secret"
-	server := NewServer(pm, powerMon, secret, nil, nil)
+	server := NewServer(pm, powerMon, secret, nil, nil, nil)
 
 	if string(server.jwtSecret) != secret {
 		t.Error("JWT secret not set correctly")
@@ -48,7 +48,7 @@ func TestNewServer_WithOllamaAndSmartd(t *testing.T) {
 	pm := power.NewPowerManager()
 	powerMon := power.NewPowerMonitor()
 
-	server := NewServer(pm, powerMon, "", nil, nil)
+	server := NewServer(pm, powerMon, "", nil, nil, nil)
 
 	if server.ollamaMonitor != nil {
 		t.Error("OllamaMonitor should be nil")
@@ -62,7 +62,7 @@ func TestHandleMode_Performance(t *testing.T) {
 	pm := power.NewPowerManager()
 	pm.SetState(false, false, false, 0, false)
 	powerMon := power.NewPowerMonitor()
-	server := NewServer(pm, powerMon, "", nil, nil)
+	server := NewServer(pm, powerMon, "", nil, nil, nil)
 
 	req := ModeRequest{Mode: "performance"}
 	body, _ := json.Marshal(req)
@@ -89,7 +89,7 @@ func TestHandleMode_Powersave(t *testing.T) {
 	pm := power.NewPowerManager()
 	pm.SetState(false, false, false, 0, false)
 	powerMon := power.NewPowerMonitor()
-	server := NewServer(pm, powerMon, "", nil, nil)
+	server := NewServer(pm, powerMon, "", nil, nil, nil)
 
 	req := ModeRequest{Mode: "powersave"}
 	body, _ := json.Marshal(req)
@@ -116,7 +116,7 @@ func TestHandleMode_Invalid(t *testing.T) {
 	pm := power.NewPowerManager()
 	pm.SetState(false, false, false, 0, false)
 	powerMon := power.NewPowerMonitor()
-	server := NewServer(pm, powerMon, "", nil, nil)
+	server := NewServer(pm, powerMon, "", nil, nil, nil)
 
 	req := ModeRequest{Mode: "invalid"}
 	body, _ := json.Marshal(req)
@@ -136,7 +136,7 @@ func TestHandleMode_WrongMethod(t *testing.T) {
 	pm := power.NewPowerManager()
 	pm.SetState(false, false, false, 0, false)
 	powerMon := power.NewPowerMonitor()
-	server := NewServer(pm, powerMon, "", nil, nil)
+	server := NewServer(pm, powerMon, "", nil, nil, nil)
 
 	httpReq := httptest.NewRequest(http.MethodGet, "/mode", nil)
 	w := httptest.NewRecorder()
@@ -152,7 +152,7 @@ func TestHandleActivity(t *testing.T) {
 	pm := power.NewPowerManager()
 	pm.SetState(false, false, false, 0, false)
 	powerMon := power.NewPowerMonitor()
-	server := NewServer(pm, powerMon, "", nil, nil)
+	server := NewServer(pm, powerMon, "", nil, nil, nil)
 
 	httpReq := httptest.NewRequest(http.MethodPost, "/activity", nil)
 	w := httptest.NewRecorder()
@@ -175,7 +175,7 @@ func TestHandleActivity_WrongMethod(t *testing.T) {
 	pm := power.NewPowerManager()
 	pm.SetState(false, false, false, 0, false)
 	powerMon := power.NewPowerMonitor()
-	server := NewServer(pm, powerMon, "", nil, nil)
+	server := NewServer(pm, powerMon, "", nil, nil, nil)
 
 	httpReq := httptest.NewRequest(http.MethodGet, "/activity", nil)
 	w := httptest.NewRecorder()
@@ -191,7 +191,7 @@ func TestHandleOllamaStats_NotEnabled(t *testing.T) {
 	pm := power.NewPowerManager()
 	pm.SetState(false, false, false, 0, false)
 	powerMon := power.NewPowerMonitor()
-	server := NewServer(pm, powerMon, "", nil, nil)
+	server := NewServer(pm, powerMon, "", nil, nil, nil)
 
 	httpReq := httptest.NewRequest(http.MethodGet, "/ollama/stats", nil)
 	w := httptest.NewRecorder()
@@ -207,7 +207,7 @@ func TestHandleSmartdStats_NotEnabled(t *testing.T) {
 	pm := power.NewPowerManager()
 	pm.SetState(false, false, false, 0, false)
 	powerMon := power.NewPowerMonitor()
-	server := NewServer(pm, powerMon, "", nil, nil)
+	server := NewServer(pm, powerMon, "", nil, nil, nil)
 
 	httpReq := httptest.NewRequest(http.MethodGet, "/smartd/stats", nil)
 	w := httptest.NewRecorder()
@@ -231,7 +231,7 @@ func TestHandleSmartdStats_WithMonitor(t *testing.T) {
 	}
 	smartdMon := smartd.NewMonitor(smartdCfg)
 
-	server := NewServer(pm, powerMon, "", nil, smartdMon)
+	server := NewServer(pm, powerMon, "", nil, smartdMon, nil)
 
 	httpReq := httptest.NewRequest(http.MethodGet, "/smartd/stats", nil)
 	w := httptest.NewRecorder()
@@ -254,7 +254,7 @@ func TestAuthMiddleware_NoSecret(t *testing.T) {
 	pm := power.NewPowerManager()
 	pm.SetState(false, false, false, 0, false)
 	powerMon := power.NewPowerMonitor()
-	server := NewServer(pm, powerMon, "", nil, nil)
+	server := NewServer(pm, powerMon, "", nil, nil, nil)
 
 	handler := server.AuthMiddleware(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
@@ -274,7 +274,7 @@ func TestAuthMiddleware_WithSecret_NoToken(t *testing.T) {
 	pm := power.NewPowerManager()
 	pm.SetState(false, false, false, 0, false)
 	powerMon := power.NewPowerMonitor()
-	server := NewServer(pm, powerMon, "secret", nil, nil)
+	server := NewServer(pm, powerMon, "secret", nil, nil, nil)
 
 	handler := server.AuthMiddleware(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
@@ -294,7 +294,7 @@ func TestAuthMiddleware_WithSecret_InvalidToken(t *testing.T) {
 	pm := power.NewPowerManager()
 	pm.SetState(false, false, false, 0, false)
 	powerMon := power.NewPowerMonitor()
-	server := NewServer(pm, powerMon, "secret", nil, nil)
+	server := NewServer(pm, powerMon, "secret", nil, nil, nil)
 
 	handler := server.AuthMiddleware(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
@@ -315,7 +315,7 @@ func TestAuthMiddleware_WithSecret_ValidToken(t *testing.T) {
 	pm := power.NewPowerManager()
 	pm.SetState(false, false, false, 0, false)
 	powerMon := power.NewPowerMonitor()
-	server := NewServer(pm, powerMon, "secret", nil, nil)
+	server := NewServer(pm, powerMon, "secret", nil, nil, nil)
 
 	handler := server.AuthMiddleware(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
