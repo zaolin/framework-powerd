@@ -15,7 +15,7 @@ from homeassistant.helpers.update_coordinator import (
     UpdateFailed,
 )
 
-from .const import DOMAIN
+from .const import DOMAIN, CONF_NOTIFY_SERVICE
 
 _LOGGER = logging.getLogger(__name__)
 
