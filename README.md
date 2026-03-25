@@ -14,7 +14,10 @@ A Go daemon to automatically manage power profiles on the **Framework Desktop**,
 - **Game Pausing**: Recursively pauses the entire process tree of a Steam game (including Proton/Wine wrappers) when idle. **Syncs state** on startup to prevent conflicts.
 - **Steam Remote Play Detection**: Detects virtual input devices from Remote Play (specifically `js` interfaces) to keep the system active.
 - **Ollama Usage Monitoring**: Tracks API usage per IP/group with cost accounting (energy × €/kWh) via journald log parsing.
-- **REST API**: Allows manual mode overriding, idle resetting, and Ollama usage statistics.
+- **Ollama Model Tracking**: Monitors loaded models and VRAM usage via Ollama's `/api/ps` endpoint.
+- **GPU Monitoring**: Tracks AMD GPU metrics via sysfs (VRAM, GTT, temperature, power) and system CPU usage via `/proc/stat`.
+- **SMART Health Monitoring**: Monitors SMART health alerts via smartd journald logs for hard drive failure detection.
+- **REST API**: Allows manual mode overriding, idle resetting, and usage statistics.
 - **JWT Authentication**: Secure API access with JSON Web Tokens.
 - **Configuration File**: JSON-based daemon configuration.
 - **Systemd Integration**: Runs effectively as a background service.
@@ -31,6 +34,8 @@ graph TD
         Remote[Virtual Joystick Check]
         Turbo[Turbostat Power Monitor]
         Ollama[Ollama Log Monitor]
+        GPU[GPU Sysfs Monitor]
+        SMART[SMARTd Journal Monitor]
         API[User API]
     end
 
@@ -48,6 +53,8 @@ graph TD
     Remote -->|Virtual Device| Main
     Turbo -->|Power/Energy Stats| Main
     Ollama -->|Usage/Cost Stats| Main
+    GPU -->|GPU Metrics| Main
+    SMART -->|Health Alerts| Main
     API -->|Override/Activity| Main
 
     Main -->|Set Profile| PCTL
@@ -55,6 +62,8 @@ graph TD
     Input -.->|fsnotify| Hotplug[Device Hotplug]
     Hotplug --> Input
     Ollama -.->|journald| Journal[systemd Journal]
+    GPU -.->|sysfs| Sysfs[/sys/class/drm]
+    SMART -.->|journald| Journal
 ```
 
 ## Power Monitoring
@@ -126,6 +135,23 @@ The daemon relies on the following tools:
 - `powertop` (Optional): For auto-tuning power parameters.
 - `scxctl` (Optional): For sched-ext scheduler management.
 
+### GPU Monitoring
+
+For AMD GPU metrics, ensure your GPU is accessible via sysfs:
+- `/sys/class/drm/card*/device/` must contain `mem_info_vram_*`, `mem_info_gtt_*`
+- For temperature/power: `hwmon` interface must be present
+
+### SMART Health Monitoring
+
+Configure smartd to log to journald. Add to `/etc/smartd.conf`:
+```
+/dev/sda -a -H -l error -l selftest -m root
+```
+Or for NVMe:
+```
+/dev/nvme0n1 -a -W 4,45,50 -m root
+```
+
 ## Installation
 
 ### Build from Source
@@ -192,10 +218,22 @@ This project is compatible with [HACS](https://hacs.xyz/) (Home Assistant Commun
 *   **Energy Consumption**: Last 24h & 7 Days (kWh, Sum of Pkg+Cor+RAM)
 *   **Uptime**: System uptime (duration)
 *   **Polling Interval**: Configurable number entity (seconds)
+*   **GPU Metrics** (if enabled):
+    *   GPU Temperature (°C)
+    *   GPU Power (Watts)
+    *   GPU VRAM Used/Total (GB)
+    *   GPU GTT Used (MB)
+    *   CPU Usage (%)
+*   **SMART Health** (if enabled):
+    *   SMART Alert (Binary Sensor)
+    *   SMART Alerts Count
 *   **Ollama Per-Group** (if enabled):
     *   Requests count
     *   Energy consumption (kWh)
     *   Cost (€ or configured currency)
+*   **Ollama Models** (if enabled):
+    *   Loaded Models (list of model names)
+    *   Ollama VRAM Usage (GB)
 
 ### API Control
 
@@ -230,6 +268,12 @@ export TOKEN="your_jwt_token_here"
   ```bash
   curl -H "Authorization: Bearer $TOKEN" http://localhost:8080/ollama/stats
   # Output: {"by_ip":{...},"by_group":{"lan":{"count":5,"total_cost":0.0012},...}}
+  ```
+
+- **Get SMART Stats** (if enabled):
+  ```bash
+  curl -H "Authorization: Bearer $TOKEN" http://localhost:8080/smartd/stats
+  # Output: {"alerts":[{"device":"/dev/sda","fail_type":"SelfTest",...}]}
   ```
 
 ### Authentication
@@ -272,12 +316,36 @@ The daemon supports a JSON configuration file. Create `/etc/framework-powerd/con
       {"name": "tailscale", "cidrs": ["100.64.0.0/10"]}
     ]
   },
+  "smartd": {
+    "enabled": true,
+    "service_unit": "smartd.service",
+    "notify_service": "notify.mobile_phone",
+    "alert_retention": "30s"
+  },
+  "gpu": {
+    "enabled": true,
+    "poll_interval": "5s"
+  },
   "pricing": {
     "energy_price_per_kwh": 0.32,
     "currency": "EUR"
   }
 }
 ```
+
+### Configuration Options
+
+| Section | Option | Type | Default | Description |
+|---------|--------|------|---------|-------------|
+| `server.address` | Address | string | `localhost` | IP to bind to |
+| `server.port` | Port | int | `8080` | HTTP port |
+| `server.idle_timeout` | Idle Timeout | duration | `5m` | Time before idle |
+| `ollama.enabled` | Enabled | bool | `false` | Enable Ollama monitoring |
+| `smartd.enabled` | Enabled | bool | `false` | Enable SMART monitoring |
+| `smartd.notify_service` | Notify Service | string | `""` | HA notify service |
+| `smartd.alert_retention` | Alert Retention | duration | `30s` | How long to keep alerts |
+| `gpu.enabled` | Enabled | bool | `false` | Enable GPU monitoring |
+| `gpu.poll_interval` | Poll Interval | duration | `5s` | GPU polling frequency |
 
 Run with config:
 ```bash
