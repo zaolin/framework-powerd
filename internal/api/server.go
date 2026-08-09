@@ -19,7 +19,8 @@ import (
 type StatusResponse struct {
 	Mode             string                      `json:"mode"`
 	IsIdle           bool                        `json:"is_idle"`
-	SecondsUntilIdle int                         `json:"seconds_until_idle"`
+	SecondsUntilIdle float64                     `json:"seconds_until_idle"`
+	IsGameRunning    bool                        `json:"is_game_running"`
 	IsGamePaused     bool                        `json:"is_game_paused"`
 	IsRemotePlay     bool                        `json:"is_remote_play"`
 	GamePID          int                         `json:"game_pid"`
@@ -139,7 +140,8 @@ func (s *Server) HandleStatus(w http.ResponseWriter, r *http.Request) {
 	resp := StatusResponse{
 		Mode:             status.Mode,
 		IsIdle:           status.IsIdle,
-		SecondsUntilIdle: int(status.SecondsUntilIdle),
+		SecondsUntilIdle: status.SecondsUntilIdle,
+		IsGameRunning:    status.IsGameRunning,
 		IsGamePaused:     status.IsGamePaused,
 		IsRemotePlay:     status.IsRemotePlay,
 		GamePID:          status.GamePID,

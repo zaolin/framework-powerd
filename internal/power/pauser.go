@@ -83,46 +83,65 @@ func (p *ProcessPauser) IsPaused() bool {
 	return p.isPaused
 }
 
-// SyncState checks if the process is already paused (State 'T') and updates internal state
+// SyncState checks if the process is already paused (State 'T') and updates internal state.
+// Only descendants that are themselves in a stopped state ('T' or 't') are recorded in
+// pausedPIDs, so a later Resume() will not SIGCONT processes that were stopped by someone
+// else (a debugger, another daemon) — A6.
 func (p *ProcessPauser) SyncState(rootPID int) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
-	data, err := os.ReadFile(fmt.Sprintf("/proc/%d/stat", rootPID))
+	rootState, err := processState(rootPID)
 	if err != nil {
 		return
+	}
+
+	// 'T' = Stopped (on a signal) or (before Linux 2.6.33) trace stopped
+	// 't' = Tracing stop
+	if rootState == "T" || rootState == "t" {
+		log.Printf("[Pauser] Detected process %d is ALREADY PAUSED (State: %s). Syncing state.", rootPID, rootState)
+		p.isPaused = true
+
+		// Only record descendants that are themselves stopped, so Resume()
+		// never wakes a process we didn't stop (A6).
+		descendants := findAllDescendants(rootPID)
+		paused := []int{rootPID}
+		for _, pid := range descendants {
+			st, err := processState(pid)
+			if err != nil {
+				continue
+			}
+			if st == "T" || st == "t" {
+				paused = append(paused, pid)
+			}
+		}
+		p.pausedPIDs = paused
+	} else {
+		p.isPaused = false
+		p.pausedPIDs = nil
+	}
+}
+
+// processState reads /proc/<pid>/stat and returns the single-char process
+// state (e.g. "R", "S", "T", "t"). Returns an error if the process is gone or
+// the stat file is unparseable. Extracted from SyncState so it is testable.
+func processState(pid int) (string, error) {
+	data, err := os.ReadFile(fmt.Sprintf("/proc/%d/stat", pid))
+	if err != nil {
+		return "", err
 	}
 
 	str := string(data)
 	lastParen := strings.LastIndex(str, ")")
 	if lastParen == -1 {
-		return
+		return "", fmt.Errorf("parse error: no closing paren")
 	}
-	// format: pid (comm) state ...
-	// state is the first field after the closing paren
 	rest := str[lastParen+2:]
 	fields := strings.Fields(rest)
 	if len(fields) < 1 {
-		return
+		return "", fmt.Errorf("stat format error: no state field")
 	}
-
-	state := fields[0]
-	// 'T' = Stopped (on a signal) or (before Linux 2.6.33) trace stopped
-	// 't' = Tracing stop
-	if state == "T" {
-		log.Printf("[Pauser] Detected process %d is ALREADY PAUSED (State: %s). Syncing state.", rootPID, state)
-		p.isPaused = true
-
-		// If it's paused, we assume the whole tree is paused (or should be).
-		// We need to populate pausedPIDs so Resume() works later.
-		descendants := findAllDescendants(rootPID)
-		p.pausedPIDs = append([]int{rootPID}, descendants...)
-	} else {
-		// Log verbose?
-		// log.Printf("[Pauser] Process %d state is %s (Running/Sleeping).", rootPID, state)
-		p.isPaused = false
-		p.pausedPIDs = nil
-	}
+	return fields[0], nil
 }
 
 // findAllDescendants brute-force scans /proc to find all children recursively

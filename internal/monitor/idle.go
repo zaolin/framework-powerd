@@ -18,22 +18,28 @@ import (
 type IdleMonitor struct {
 	Timeout        time.Duration
 	Debug          bool
-	lastActivity   int64 // Atomic Unix timestamp
+	tickInterval   time.Duration // how often runTicker checks; defaults to 1s
+	lastActivity   atomic.Int64  // UnixNano timestamp of last input event
 	watchedDevices map[string]bool
 	mu             sync.Mutex
+	isIdle         atomic.Bool // single source of truth for idle flag (A5)
 }
 
 // NewIdleMonitor creates a new monitor with the specified timeout
 func NewIdleMonitor(timeout time.Duration, debug bool) *IdleMonitor {
-	return &IdleMonitor{
+	m := &IdleMonitor{
 		Timeout:        timeout,
 		Debug:          debug,
-		lastActivity:   time.Now().Unix(),
+		tickInterval:   1 * time.Second,
 		watchedDevices: make(map[string]bool),
 	}
+	m.lastActivity.Store(time.Now().UnixNano())
+	return m
 }
 
-// Start begins monitoring input devices and checking for idle state
+// Start begins monitoring input devices and checking for idle state.
+// Returns an error only if the fsnotify hotplug watcher cannot be created at
+// all (A8); partial failures (watch /dev/input denied) are logged and skipped.
 func (m *IdleMonitor) Start(ctx context.Context, onIdle func(), onActive func()) error {
 	// 1. Initial Scan: Start watchers for existing input devices
 	if err := m.scanAndWatch(ctx); err != nil {
@@ -43,11 +49,12 @@ func (m *IdleMonitor) Start(ctx context.Context, onIdle func(), onActive func())
 	// 2. Hotplug: Watch /dev/input for new devices
 	watcher, err := fsnotify.NewWatcher()
 	if err != nil {
+		// fsnotify unavailable — hotplug disabled, but the ticker still runs.
 		log.Printf("[IdleMonitor] Warning: Failed to create fsnotify watcher: %v. Hotplug disabled.\n", err)
 	} else {
 		// Watch /dev/input directory
 		if err := watcher.Add("/dev/input"); err != nil {
-			log.Printf("[IdleMonitor] Warning: Failed to watch /dev/input: %v\n", err)
+			log.Printf("[IdleMonitor] Warning: Failed to watch /dev/input: %v. Hotplug disabled.\n", err)
 			watcher.Close()
 		} else {
 			log.Println("[IdleMonitor] Hotplug detection enabled on /dev/input")
@@ -59,6 +66,12 @@ func (m *IdleMonitor) Start(ctx context.Context, onIdle func(), onActive func())
 	go m.runTicker(ctx, onIdle, onActive)
 
 	return nil
+}
+
+// IsIdle returns the current idle flag. It is the single source of truth for
+// idle state (A5); main.go reads this instead of maintaining its own copy.
+func (m *IdleMonitor) IsIdle() bool {
+	return m.isIdle.Load()
 }
 
 // scanAndWatch finds all current input devices and starts watching them
@@ -209,8 +222,8 @@ func (m *IdleMonitor) watchDevice(ctx context.Context, path string) {
 				}
 			}
 
-			// Update activity timestamp
-			atomic.StoreInt64(&m.lastActivity, time.Now().Unix())
+			// Update activity timestamp (nanosecond resolution; A5)
+			m.lastActivity.Store(time.Now().UnixNano())
 
 			if m.Debug {
 				if time.Since(lastLog) > 5*time.Second {
@@ -245,43 +258,47 @@ func (m *IdleMonitor) isJoystick(eventPath string) bool {
 	return isJs
 }
 
-// runTicker checks every second if the timeout has been exceeded
+// runTicker checks every tickInterval if the timeout has been exceeded
 func (m *IdleMonitor) runTicker(ctx context.Context, onIdle func(), onActive func()) {
-	ticker := time.NewTicker(1 * time.Second)
+	ticker := time.NewTicker(m.tickInterval)
 	defer ticker.Stop()
-
-	isIdle := false
 
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			last := atomic.LoadInt64(&m.lastActivity)
-			now := time.Now().Unix()
-			diff := now - last
+			m.checkIdleTick(onIdle, onActive)
+		}
+	}
+}
 
-			if diff >= int64(m.Timeout.Seconds()) {
-				if !isIdle {
-					isIdle = true
-					log.Printf("[IdleMonitor] Idle Triggered! No activity for %d seconds.\n", diff)
-					onIdle()
-				}
-			} else {
-				if isIdle {
-					isIdle = false
-					log.Println("[IdleMonitor] Activity Detected! Resuming...")
-					onActive()
-				}
-			}
+// checkIdleTick performs a single idle-state evaluation and fires the
+// appropriate edge-transition callback. Extracted from runTicker so tests can
+// exercise the transition logic without starting real device watchers.
+func (m *IdleMonitor) checkIdleTick(onIdle func(), onActive func()) {
+	last := time.Unix(0, m.lastActivity.Load())
+	elapsed := time.Since(last)
+
+	if elapsed >= m.Timeout {
+		if !m.isIdle.Load() {
+			m.isIdle.Store(true)
+			log.Printf("[IdleMonitor] Idle Triggered! No activity for %s.\n", elapsed.Round(time.Second))
+			onIdle()
+		}
+	} else {
+		if m.isIdle.Load() {
+			m.isIdle.Store(false)
+			log.Println("[IdleMonitor] Activity Detected! Resuming...")
+			onActive()
 		}
 	}
 }
 
 // GetTimeUntilIdle returns the duration remaining until the system enters idle state
 func (m *IdleMonitor) GetTimeUntilIdle() time.Duration {
-	last := atomic.LoadInt64(&m.lastActivity)
-	elapsed := time.Since(time.Unix(last, 0))
+	last := time.Unix(0, m.lastActivity.Load())
+	elapsed := time.Since(last)
 	remaining := m.Timeout - elapsed
 	if remaining < 0 {
 		return 0
@@ -291,7 +308,7 @@ func (m *IdleMonitor) GetTimeUntilIdle() time.Duration {
 
 // ResetActivity manually resets the idle timer
 func (m *IdleMonitor) ResetActivity() {
-	atomic.StoreInt64(&m.lastActivity, time.Now().Unix())
+	m.lastActivity.Store(time.Now().UnixNano())
 	if m.Debug {
 		log.Println("[IdleMonitor] Debug: Activity manually reset via API")
 	}

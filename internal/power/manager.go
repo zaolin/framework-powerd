@@ -154,7 +154,7 @@ func (pm *PowerManager) SetDefaultActive() error {
 	return pm.SetPerformance("Active Usage")
 }
 
-// SetPerformance enables performance mode
+// SetPerformance enables performance mode.
 func (pm *PowerManager) SetPerformance(reason string) error {
 	pm.mu.Lock()
 	if pm.currentMode == "performance" {
@@ -162,16 +162,22 @@ func (pm *PowerManager) SetPerformance(reason string) error {
 		log.Printf("[MODE IGNORED] Already in Performance Mode (%s)\n", reason)
 		return nil
 	}
-	pm.currentMode = "performance"
 	pm.mu.Unlock()
 
 	log.Printf("[MODE SET] Switching to Performance Mode (%s)\n", reason)
 
-	// 1. Power Profile -> Performance
+	// 1. Power Profile -> Performance (primary; its error is authoritative)
 	if err := runCommand("powerprofilesctl", "set", "performance"); err != nil {
 		log.Printf("Error setting power profile: %v\n", err)
+		return fmt.Errorf("set performance power profile: %w", err)
 	}
 
+	// Primary command succeeded — commit the mode.
+	pm.mu.Lock()
+	pm.currentMode = "performance"
+	pm.mu.Unlock()
+
+	// Best-effort tuning steps below; they log errors but do not fail the call.
 	// 2. CPU Preference -> Speed
 	setCPUPref("balance_performance")
 
@@ -199,16 +205,22 @@ func (pm *PowerManager) SetPowersave(reason string) error {
 		log.Printf("[MODE IGNORED] Already in Power Saver Mode (%s)\n", reason)
 		return nil
 	}
-	pm.currentMode = "powersave"
 	pm.mu.Unlock()
 
 	log.Printf("[MODE SET] Switching to Power Saver (%s)\n", reason)
 
-	// 1. Power Profile -> Power Saver
+	// 1. Power Profile -> Power Saver (primary; its error is authoritative)
 	if err := runCommand("powerprofilesctl", "set", "power-saver"); err != nil {
 		log.Printf("Error setting power profile: %v\n", err)
+		return fmt.Errorf("set powersave power profile: %w", err)
 	}
 
+	// Primary command succeeded — commit the mode.
+	pm.mu.Lock()
+	pm.currentMode = "powersave"
+	pm.mu.Unlock()
+
+	// Best-effort tuning steps below.
 	// 2. CPU Preference -> Power Saving
 	setCPUPref("power")
 
@@ -300,7 +312,29 @@ func (pm *PowerManager) disableLatency() {
 
 // Helper functions
 
-func runCommand(name string, args ...string) error {
+// commandRunner is the seam used to execute external commands. It is a
+// package-level variable so tests can inject a fake without touching the real
+// process table. Production code uses the default (real exec.Command).
+var commandRunner execRunner = realExecRunner{}
+
+// ExecRunner is the seam exposed for tests in other packages (e.g. api tests).
+type ExecRunner = execRunner
+
+// CommandRunner returns the active command runner.
+func CommandRunner() ExecRunner { return commandRunner }
+
+// SetCommandRunner swaps the command runner. Intended for tests; the caller is
+// responsible for restoring the previous value (use the helpers in test code).
+func SetCommandRunner(r ExecRunner) { commandRunner = r }
+
+type execRunner interface {
+	Run(name string, args ...string) error
+	LookPath(name string) bool
+}
+
+type realExecRunner struct{}
+
+func (realExecRunner) Run(name string, args ...string) error {
 	cmd := exec.Command(name, args...)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
@@ -309,9 +343,17 @@ func runCommand(name string, args ...string) error {
 	return nil
 }
 
-func commandExists(cmd string) bool {
-	_, err := exec.LookPath(cmd)
+func (realExecRunner) LookPath(name string) bool {
+	_, err := exec.LookPath(name)
 	return err == nil
+}
+
+func runCommand(name string, args ...string) error {
+	return commandRunner.Run(name, args...)
+}
+
+func commandExists(cmd string) bool {
+	return commandRunner.LookPath(cmd)
 }
 
 func setCPUPref(pref string) {

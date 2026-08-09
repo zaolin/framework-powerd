@@ -4,11 +4,10 @@ import logging
 from datetime import timedelta
 
 import aiohttp
-import async_timeout
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_HOST, CONF_PORT, CONF_TOKEN, Platform
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.update_coordinator import (
     CoordinatorEntity,
     DataUpdateCoordinator,
@@ -43,6 +42,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Unload a config entry."""
     if unload_ok := await hass.config_entries.async_unload_platforms(entry, PLATFORMS):
+        coordinator = hass.data[DOMAIN].get(entry.entry_id)
+        if coordinator is not None:
+            coordinator.shutdown_dynamic_registrar()
         hass.data[DOMAIN].pop(entry.entry_id)
 
     return unload_ok
@@ -62,6 +64,13 @@ class FrameworkPowerCoordinator(DataUpdateCoordinator):
         if token:
             self.headers["Authorization"] = f"Bearer {token}"
 
+        # A11: dynamic entity registration. Platforms register factories here;
+        # each factory returns a list of entities to add on the update where it
+        # first becomes applicable, or an empty list to keep waiting. Once a
+        # factory yields entities it is removed so it isn't called again.
+        self._entity_factories: list[tuple[callable, bool]] = []
+        self._dynamic_unsub = None
+
         super().__init__(
             hass,
             _LOGGER,
@@ -69,10 +78,59 @@ class FrameworkPowerCoordinator(DataUpdateCoordinator):
             update_interval=timedelta(seconds=10),
         )
 
+    def register_entity_factory(self, factory: callable) -> None:
+        """Register a dynamic entity factory.
+
+        factory is called with (self) after each successful update and must
+        return a list of entity instances to add, or an empty list to keep
+        waiting. Once it returns a non-empty list it is removed.
+        """
+        self._entity_factories.append([factory, False])
+
+    def attach_dynamic_registrar(self, add_entities_cb: callable) -> None:
+        """Attach the update listener that drains pending factories.
+
+        add_entities_cb is the async_add_entities callback from the sensor
+        platform's async_setup_entry. It is called with the entities produced
+        by any factory that becomes applicable on an update.
+        """
+        if self._dynamic_unsub is not None:
+            return  # already attached
+
+        @callback
+        def _on_update():
+            if not self.last_update_success or self.data is None:
+                return
+            pending: list = []
+            for entry in self._entity_factories:
+                factory, done = entry
+                if done:
+                    continue
+                try:
+                    entities = factory(self) or []
+                except Exception:  # pragma: no cover - defensive
+                    _LOGGER.exception("dynamic entity factory raised; skipping")
+                    entities = []
+                if entities:
+                    entry[1] = True
+                    pending.extend(entities)
+            if pending:
+                add_entities_cb(pending)
+
+        self._dynamic_unsub = self.async_add_listener(_on_update)
+
+    def shutdown_dynamic_registrar(self) -> None:
+        """Detach the update listener (called on unload)."""
+        if self._dynamic_unsub is not None:
+            self._dynamic_unsub()
+            self._dynamic_unsub = None
+
     async def _async_update_data(self):
         """Fetch data from API endpoints."""
         try:
-            async with async_timeout.timeout(10):
+            # asyncio.timeout is stdlib (Python 3.11+); replaces the fragile
+            # async_timeout package import that is not guaranteed in HA installs.
+            async with asyncio.timeout(10):
                 async with aiohttp.ClientSession() as session:
                     # Fetch main status
                     async with session.get(

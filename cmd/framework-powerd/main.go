@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/signal"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -108,17 +109,17 @@ func runServer() {
 		log.Printf("Initial detection failed: %v\n", err)
 	}
 
-	// State tracking
-	var isGameRunning bool
-	var gamePID int
-	var isIdle bool
-	var isRemotePlay bool // Used mainly for logging now, as idle handles "active" remote play
-
 	// Components
 	pauser := power.NewProcessPauser()
 
+	// Guarded shared state. Written from multiple goroutines
+	// (idle monitor, remote-play detector, steam detector, API handler)
+	// and read in updatePowerState. All access goes through the lock.
+	state := &daemonState{}
+
 	// Logic handler
 	updatePowerState := func() {
+		st := state.snapshot()
 
 		// New Priority:
 		// 1. Idle -> Power Saver (AND Pause Game if running)
@@ -127,10 +128,10 @@ func runServer() {
 		// Refined Priority based on User Feedback:
 		// "remote play and a game is active then ignore idle"
 
-		shouldIdle := isIdle
+		shouldIdle := st.isIdle
 
-		if isRemotePlay && isGameRunning {
-			if isIdle {
+		if st.isRemotePlay && st.isGameRunning {
+			if st.isIdle {
 				log.Println("[PowerLogic] System Idle, but Remote Play & Game Active. Keeping Performance.")
 			}
 			shouldIdle = false
@@ -140,9 +141,9 @@ func runServer() {
 			log.Println("[PowerLogic] System Idle (No Input). Force Power Saver.")
 
 			// Pause Game if running
-			if isGameRunning && gamePID > 0 {
+			if st.isGameRunning && st.gamePID > 0 {
 				if !pauser.IsPaused() {
-					if err := pauser.Pause(gamePID); err != nil {
+					if err := pauser.Pause(st.gamePID); err != nil {
 						log.Printf("Failed to pause game: %v\n", err)
 					}
 				}
@@ -160,7 +161,7 @@ func runServer() {
 				}
 			}
 
-			if isGameRunning || isRemotePlay {
+			if st.isGameRunning || st.isRemotePlay {
 				log.Println("[PowerLogic] Active Usage (Game/Remote). Force Performance.")
 				if err := pm.SetPerformance("Game/Remote Active"); err != nil {
 					log.Printf("Failed to set performance: %v\n", err)
@@ -174,7 +175,7 @@ func runServer() {
 		}
 
 		// Update Status within (potentially) new state
-		pm.SetState(isIdle, isRemotePlay, isGameRunning, gamePID, pauser.IsPaused())
+		pm.SetState(st.isIdle, st.isRemotePlay, st.isGameRunning, st.gamePID, pauser.IsPaused())
 	}
 
 	// Start Idle Monitor (Raw Input)
@@ -187,11 +188,11 @@ func runServer() {
 	go func() {
 		if err := idleMon.Start(idleCtx,
 			func() {
-				isIdle = true
+				state.setIdle(true)
 				updatePowerState()
 			},
 			func() {
-				isIdle = false
+				state.setIdle(false)
 				updatePowerState()
 			},
 		); err != nil {
@@ -207,7 +208,7 @@ func runServer() {
 	go func() {
 		if err := rpDet.Start(rpCtx,
 			func(devices []string) {
-				isRemotePlay = true
+				state.setRemotePlay(true)
 				// Note: Remote Play creates a virtual input device.
 				// We now explicitly add these devices to the IdleMonitor logic to ensure
 				// they are watched, even if hotplug detection missed them or they are unusual.
@@ -217,7 +218,7 @@ func runServer() {
 				updatePowerState()
 			},
 			func() {
-				isRemotePlay = false
+				state.setRemotePlay(false)
 				updatePowerState()
 			},
 		); err != nil {
@@ -233,13 +234,13 @@ func runServer() {
 	// This ensures we catch any running/paused game immediately even after daemon restart
 	if initialPID, err := steamDet.Detect(); err == nil && initialPID > 0 {
 		log.Printf("[Startup] Detected existing Steam Game (PID: %d)\n", initialPID)
-		isGameRunning = true
-		gamePID = initialPID
+		state.setGame(initialPID)
 		steamDet.LastPID = initialPID
 		pauser.SyncState(initialPID)
 		// No need to call updatePowerState() here, it will be called by idleMon or rpDet callbacks
 		// or we can force it:
-		pm.SetState(isIdle, isRemotePlay, isGameRunning, gamePID, pauser.IsPaused())
+		st := state.snapshot()
+		pm.SetState(st.isIdle, st.isRemotePlay, st.isGameRunning, st.gamePID, pauser.IsPaused())
 	}
 
 	// Create a context for the detector
@@ -250,8 +251,7 @@ func runServer() {
 		func(pid int) {
 			// On Game Start
 			log.Printf("Steam Game Started (PID: %d).\n", pid)
-			isGameRunning = true
-			gamePID = pid
+			state.setGame(pid)
 
 			// Check if it's already paused (e.g. restarts)
 			pauser.SyncState(pid)
@@ -261,8 +261,7 @@ func runServer() {
 		func() {
 			// On Game Stop
 			log.Println("Steam Game Stopped.")
-			isGameRunning = false
-			gamePID = 0
+			state.setGame(0)
 			// Ensure we resume if we were paused (though process is likely gone/stopping)
 			if pauser.IsPaused() {
 				pauser.Resume()
@@ -369,3 +368,38 @@ func runServer() {
 	<-stop
 	log.Println("Shutting down...")
 }
+
+// daemonState is the shared, mutex-guarded state written from multiple
+// goroutines (idle monitor, remote-play detector, steam detector, API
+// handler via TriggerActivity). Without this guard the four bare vars that
+// preceded it raced under -race (A2). All access goes through the methods.
+type daemonState struct {
+	mu            sync.Mutex
+	isIdle        bool
+	isRemotePlay  bool
+	isGameRunning bool
+	gamePID       int
+}
+
+// stateSnapshot is a consistent point-in-time copy of daemonState.
+type stateSnapshot struct {
+	isIdle        bool
+	isRemotePlay  bool
+	isGameRunning bool
+	gamePID       int
+}
+
+func (s *daemonState) snapshot() stateSnapshot {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return stateSnapshot{
+		isIdle:        s.isIdle,
+		isRemotePlay:  s.isRemotePlay,
+		isGameRunning: s.isGameRunning,
+		gamePID:       s.gamePID,
+	}
+}
+
+func (s *daemonState) setIdle(v bool)         { s.mu.Lock(); s.isIdle = v; s.mu.Unlock() }
+func (s *daemonState) setRemotePlay(v bool)   { s.mu.Lock(); s.isRemotePlay = v; s.mu.Unlock() }
+func (s *daemonState) setGame(pid int)        { s.mu.Lock(); s.isGameRunning = pid > 0; s.gamePID = pid; s.mu.Unlock() }

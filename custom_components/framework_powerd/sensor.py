@@ -6,6 +6,7 @@ from homeassistant.components.sensor import (
 )
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import (
+    UnitOfInformation,
     UnitOfPower,
     UnitOfEnergy,
     UnitOfTime,
@@ -87,6 +88,40 @@ async def async_setup_entry(
         entities.append(OllamaVRAMSensor(coordinator))
 
     async_add_entities(entities)
+
+    # A11: register dynamic factories so entities for Ollama models and
+    # per-device SMART alerts appear when they first show up in coordinator
+    # data, even if they were absent at setup time.
+    _registered_smartd_devices: set[str] = set(
+        alert.get("device") for alert in smartd_data.get("alerts", []) if alert.get("device")
+    )
+
+    def _ollama_models_factory(coord):
+        data = coord.data or {}
+        models = data.get("ollama", {}).get("models")
+        if models:
+            return [OllamaModelsSensor(coord), OllamaVRAMSensor(coord)]
+        return []
+
+    def _make_smartd_device_factory(device):
+        def _factory(coord):
+            return [SmartdDeviceSensor(coord, device)]
+        return _factory
+
+    def _smartd_devices_factory(coord):
+        data = coord.data or {}
+        alerts = data.get("smartd", {}).get("alerts", [])
+        new = []
+        for alert in alerts:
+            dev = alert.get("device")
+            if dev and dev not in _registered_smartd_devices:
+                _registered_smartd_devices.add(dev)
+                new.append(SmartdDeviceSensor(coord, dev))
+        return new
+
+    coordinator.register_entity_factory(_ollama_models_factory)
+    coordinator.register_entity_factory(_smartd_devices_factory)
+    coordinator.attach_dynamic_registrar(async_add_entities)
 
 
 class FrameworkEntity(CoordinatorEntity):
@@ -316,6 +351,8 @@ class GPUVRAMUsedSensor(FrameworkEntity, SensorEntity):
     _attr_name = "GPU VRAM Used"
     _attr_unique_id = "gpu_vram_used"
     _attr_device_class = SensorDeviceClass.DATA_SIZE
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_native_unit_of_measurement = UnitOfInformation.GIBIBYTES
     _attr_icon = "mdi:memory"
 
     @property
@@ -330,6 +367,8 @@ class GPUVRAMTotalSensor(FrameworkEntity, SensorEntity):
     _attr_name = "GPU VRAM Total"
     _attr_unique_id = "gpu_vram_total"
     _attr_device_class = SensorDeviceClass.DATA_SIZE
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_native_unit_of_measurement = UnitOfInformation.GIBIBYTES
     _attr_icon = "mdi:memory"
 
     @property
@@ -343,6 +382,9 @@ class GPUTTGUsedSensor(FrameworkEntity, SensorEntity):
     """GPU GTT used sensor."""
     _attr_name = "GPU GTT Used"
     _attr_unique_id = "gpu_gtt_used"
+    _attr_device_class = SensorDeviceClass.DATA_SIZE
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_native_unit_of_measurement = UnitOfInformation.MEBIBYTES
     _attr_icon = "mdi:memory"
 
     @property
@@ -388,6 +430,8 @@ class OllamaVRAMSensor(FrameworkEntity, SensorEntity):
     _attr_name = "Ollama VRAM"
     _attr_unique_id = "ollama_vram"
     _attr_device_class = SensorDeviceClass.DATA_SIZE
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_native_unit_of_measurement = UnitOfInformation.GIBIBYTES
     _attr_icon = "mdi:memory"
 
     @property
