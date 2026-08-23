@@ -29,6 +29,8 @@ type PeripheralEstimator struct {
 	wifiIdle     float64
 	wifiActive   float64
 	wifiPresent  bool
+	wifiIsUSB    bool   // true if WiFi is a USB adapter (power already in USB estimate)
+	wifiIface    string
 	ethPresent   bool
 	ethIface     string
 	vrmLossPct   float64 // VRM loss percentage (e.g. 7.0 = 7%)
@@ -134,8 +136,13 @@ func (e *PeripheralEstimator) LogDetection() {
 			e.fanHwmonName, e.fanIdleRPM, e.fanIdleWatts, e.fanTargetRPM, e.fanMaxWatts)
 	}
 	if e.wifiPresent {
-		log.Printf("[Peripherals]   WiFi: detected (idle=%.1fW, active=%.1fW)",
-			e.wifiIdle, e.wifiActive)
+		if e.wifiIsUSB {
+			log.Printf("[Peripherals]   WiFi: %s (USB adapter — power included in USB estimate)",
+				e.wifiIface)
+		} else {
+			log.Printf("[Peripherals]   WiFi: %s (PCI adapter, idle=%.1fW, active=%.1fW)",
+				e.wifiIface, e.wifiIdle, e.wifiActive)
+		}
 	} else {
 		log.Println("[Peripherals]   WiFi: not detected")
 	}
@@ -217,6 +224,13 @@ func (e *PeripheralEstimator) detectFan() {
 		}
 		e.fanPath = fanPath
 
+		// Read hwmon name for logging
+		hwmonDir := filepath.Dir(fanPath)
+		nameData, err := os.ReadFile(filepath.Join(hwmonDir, "name"))
+		if err == nil {
+			e.fanHwmonName = strings.TrimSpace(string(nameData))
+		}
+
 		// Try to read the target RPM (max)
 		base := strings.TrimSuffix(fanPath, "_input")
 		targetData, err := os.ReadFile(base + "_target")
@@ -247,26 +261,41 @@ func (e *PeripheralEstimator) detectFan() {
 	}
 }
 
-// detectWiFi checks for a wireless network controller via PCI class 0x028000.
+// detectWiFi checks for a wireless network interface via /sys/class/net/*/wireless.
+// This catches both PCI and USB WiFi adapters. If the WiFi adapter is USB,
+// its power is already included in the USB bMaxPower estimate — so we zero
+// out the separate WiFi estimate to avoid double-counting.
 func (e *PeripheralEstimator) detectWiFi() {
-	matches, _ := filepath.Glob("/sys/bus/pci/devices/*/class")
-	for _, classPath := range matches {
-		data, err := os.ReadFile(classPath)
-		if err != nil {
-			continue
+	matches, _ := filepath.Glob("/sys/class/net/*")
+	for _, netPath := range matches {
+		wirelessPath := filepath.Join(netPath, "wireless")
+		if _, err := os.Stat(wirelessPath); err != nil {
+			continue // not a wireless interface
 		}
-		class := strings.TrimSpace(string(data))
-		// 0x028000 = network controller, wireless
-		if class == "0x028000" {
-			return // WiFi found, keep defaults
+
+		// WiFi found — check if it's a USB device
+		devicePath := filepath.Join(netPath, "device")
+		e.wifiPresent = true
+		e.wifiIface = filepath.Base(netPath)
+
+		// Resolve the device symlink to check if it's USB
+		resolved, err := filepath.EvalSymlinks(devicePath)
+		if err == nil && strings.Contains(resolved, "/sys/bus/usb/") {
+			// USB WiFi adapter — power already counted in USB estimate
+			e.wifiIsUSB = true
+			e.wifiIdle = 0
+			e.wifiActive = 0
 		}
+		// If PCI WiFi, keep the defaults (0.8W idle / 3.0W active)
+		return
 	}
 	// No WiFi detected → zero it out
 	e.wifiIdle = 0
 	e.wifiActive = 0
 }
 
-// detectEthernet checks for an ethernet controller and its link state.
+// detectEthernet checks for an ethernet controller with an active link.
+// Only reports Ethernet as present if the interface is UP (cable connected).
 func (e *PeripheralEstimator) detectEthernet() {
 	matches, _ := filepath.Glob("/sys/class/net/*")
 	for _, netPath := range matches {
@@ -281,6 +310,14 @@ func (e *PeripheralEstimator) detectEthernet() {
 		// Check if it's an ethernet interface (not wireless)
 		if _, err := os.Stat(filepath.Join(netPath, "wireless")); err == nil {
 			continue // skip wireless interfaces
+		}
+		// Only count as present if the interface is UP (cable connected)
+		operData, err := os.ReadFile(filepath.Join(netPath, "operstate"))
+		if err != nil {
+			continue
+		}
+		if strings.TrimSpace(string(operData)) != "up" {
+			continue // interface is down — no power draw
 		}
 		e.ethPresent = true
 		e.ethIface = ifaceName
