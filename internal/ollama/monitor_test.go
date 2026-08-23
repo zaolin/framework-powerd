@@ -417,6 +417,60 @@ func TestRecordRequest_UngroupedBucket(t *testing.T) {
 	}
 }
 
+// TestRecordRequest_SkipsMonitoringEndpoints verifies that the daemon's own
+// /api/ps and /api/version GET requests are not counted as user requests.
+// Without this filter, the daemon's own monitoring polls create a feedback
+// loop that prevents idle and inflates the request count.
+func TestRecordRequest_SkipsMonitoringEndpoints(t *testing.T) {
+	pm := power.NewPowerManager()
+	mon := NewMonitor(pm, nil, config.OllamaConfig{ServiceUnit: "ollama.service"}, config.PricingConfig{})
+
+	// Simulate the daemon's own monitoring polls
+	mon.recordRequest(&RequestInfo{
+		Timestamp: time.Now(),
+		IP:        "::1",
+		Method:    "GET",
+		Endpoint:  "/api/ps",
+		Status:    200,
+		Duration:  0,
+	})
+	mon.recordRequest(&RequestInfo{
+		Timestamp: time.Now(),
+		IP:        "::1",
+		Method:    "GET",
+		Endpoint:  "/api/version",
+		Status:    200,
+		Duration:  0,
+	})
+
+	mon.mu.RLock()
+	defer mon.mu.RUnlock()
+
+	// No requests should be recorded
+	if len(mon.stats.ByIP) != 0 {
+		t.Errorf("ByIP should be empty (monitoring endpoints skipped), got %d entries", len(mon.stats.ByIP))
+	}
+	if mon.stats.Ungrouped.Count != 0 {
+		t.Errorf("ungrouped.Count = %d, want 0 (monitoring endpoints skipped)", mon.stats.Ungrouped.Count)
+	}
+
+	// But a real user request (POST /api/chat) should still be recorded
+	mon.mu.RUnlock()
+	mon.recordRequest(&RequestInfo{
+		Timestamp: time.Now(),
+		IP:        "192.168.1.1",
+		Method:    "POST",
+		Endpoint:  "/api/chat",
+		Status:    200,
+		Duration:  2 * time.Second,
+	})
+	mon.mu.RLock()
+
+	if mon.stats.ByIP["192.168.1.1"].Count != 1 {
+		t.Errorf("real request should be recorded: ByIP count = %d, want 1", mon.stats.ByIP["192.168.1.1"].Count)
+	}
+}
+
 // TestPollOllamaVersion_HappyPath verifies pollOllamaVersion returns the version
 // from a mock /api/version endpoint.
 func TestPollOllamaVersion_HappyPath(t *testing.T) {

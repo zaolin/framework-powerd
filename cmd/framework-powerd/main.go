@@ -272,12 +272,13 @@ func runServer() {
 	// the estimator + mode provider to the power monitor.
 	periphEst := peripherals.Detect(peripherals.Config{
 		VRMLossPercent:  cfg.Peripherals.VRMLossPercent,
-		FanIdleRPM:     cfg.Peripherals.FanIdleRPM,
-		NVMeIdleWatts:  cfg.Peripherals.NVMeIdleWatts,
+		FanIdleRPM:      cfg.Peripherals.FanIdleRPM,
+		NVMeIdleWatts:   cfg.Peripherals.NVMeIdleWatts,
 		NVMeActiveWatts: cfg.Peripherals.NVMeActiveWatts,
-		WiFiIdleWatts:  cfg.Peripherals.WiFiIdleWatts,
+		WiFiIdleWatts:   cfg.Peripherals.WiFiIdleWatts,
 		WiFiActiveWatts: cfg.Peripherals.WiFiActiveWatts,
 	})
+	periphEst.LogDetection()
 	powerMon.SetPeripherals(periphEst)
 	powerMon.SetModeProvider(pm.GetCurrentMode)
 

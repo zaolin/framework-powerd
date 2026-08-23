@@ -5,6 +5,7 @@ package peripherals
 
 import (
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -14,19 +15,29 @@ import (
 // PeripheralEstimator holds auto-detected device info and estimates power.
 type PeripheralEstimator struct {
 	usbMaxWatts  float64 // sum of all USB bMaxPower converted to watts
+	usbDevices   []usbDeviceInfo
 	nvmeIdle     float64
 	nvmeActive   float64
 	nvmePaths    []string // /sys/class/nvme/nvmeN for runtime_status check
+	nvmeModel    string
 	fanPath      string  // /sys/class/hwmon/hwmonN/fan1_input
 	fanTargetRPM int
 	fanIdleRPM   int
 	fanIdleWatts float64
 	fanMaxWatts  float64
+	fanHwmonName string
 	wifiIdle     float64
 	wifiActive   float64
+	wifiPresent  bool
 	ethPresent   bool
 	ethIface     string
 	vrmLossPct   float64 // VRM loss percentage (e.g. 7.0 = 7%)
+	debug        bool
+}
+
+type usbDeviceInfo struct {
+	name  string
+	maxW  float64
 }
 
 // nvmePowerTable holds known NVMe SSD power specs (idle watts, active watts).
@@ -105,6 +116,41 @@ func Detect(cfg Config) *PeripheralEstimator {
 	return e
 }
 
+// LogDetection prints a summary of all auto-detected peripherals and their
+// power estimates. Call once at daemon startup.
+func (e *PeripheralEstimator) LogDetection() {
+	log.Println("[Peripherals] Auto-detected devices:")
+	for _, usb := range e.usbDevices {
+		log.Printf("[Peripherals]   USB: %s (%.1fW max)", usb.name, usb.maxW)
+	}
+	log.Printf("[Peripherals]   USB total: %.2fW max (30%% idle = %.2fW)",
+		e.usbMaxWatts, e.usbMaxWatts*0.3)
+	if e.nvmeModel != "" {
+		log.Printf("[Peripherals]   NVMe: %s (idle=%.2fW, active=%.1fW)",
+			e.nvmeModel, e.nvmeIdle, e.nvmeActive)
+	}
+	if e.fanPath != "" {
+		log.Printf("[Peripherals]   Fan: %s (idle=%dRPM/%.1fW, max=%dRPM/%.1fW)",
+			e.fanHwmonName, e.fanIdleRPM, e.fanIdleWatts, e.fanTargetRPM, e.fanMaxWatts)
+	}
+	if e.wifiPresent {
+		log.Printf("[Peripherals]   WiFi: detected (idle=%.1fW, active=%.1fW)",
+			e.wifiIdle, e.wifiActive)
+	} else {
+		log.Println("[Peripherals]   WiFi: not detected")
+	}
+	if e.ethPresent {
+		log.Printf("[Peripherals]   Ethernet: %s", e.ethIface)
+	} else {
+		log.Println("[Peripherals]   Ethernet: not detected")
+	}
+	log.Printf("[Peripherals]   VRM loss: %.0f%%", e.vrmLossPct)
+	powersaveW := e.EstimateWatts("powersave")
+	perfW := e.EstimateWatts("performance")
+	log.Printf("[Peripherals] Estimated peripheral draw: %.2fW (idle) / %.2fW (active)",
+		powersaveW, perfW)
+}
+
 // detectUSB scans /sys/bus/usb/devices/*/bMaxPower and sums the wattage.
 func (e *PeripheralEstimator) detectUSB() {
 	matches, _ := filepath.Glob("/sys/bus/usb/devices/*/bMaxPower")
@@ -121,7 +167,17 @@ func (e *PeripheralEstimator) detectUSB() {
 			continue
 		}
 		// Convert mA at 5V → watts: W = mA * 5 / 1000
-		e.usbMaxWatts += ma * 5.0 / 1000.0
+		w := ma * 5.0 / 1000.0
+		e.usbMaxWatts += w
+
+		// Read device name for logging
+		dir := filepath.Dir(path)
+		prod, _ := os.ReadFile(filepath.Join(dir, "product"))
+		name := strings.TrimSpace(string(prod))
+		if name == "" {
+			name = filepath.Base(dir)
+		}
+		e.usbDevices = append(e.usbDevices, usbDeviceInfo{name: name, maxW: w})
 	}
 }
 
@@ -136,6 +192,7 @@ func (e *PeripheralEstimator) detectNVMe() {
 			continue
 		}
 		model := strings.TrimSpace(string(modelData))
+		e.nvmeModel = model
 		// Remove spaces for matching
 		modelKey := strings.ReplaceAll(model, " ", "")
 

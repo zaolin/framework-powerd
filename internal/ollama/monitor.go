@@ -201,6 +201,14 @@ func parseDuration(s string) time.Duration {
 
 // recordRequest updates statistics with a new request
 func (m *Monitor) recordRequest(info *RequestInfo) {
+	// Skip the daemon's own monitoring endpoints — they are not user requests
+	// and should not reset the idle timer or inflate the request count.
+	// /api/ps and /api/version are polled by GetStats() every HA cycle (10s);
+	// without this filter they create a feedback loop that prevents idle.
+	if info.Method == "GET" && (info.Endpoint == "/api/ps" || info.Endpoint == "/api/version") {
+		return
+	}
+
 	m.mu.Lock()
 	defer m.mu.Unlock()
 

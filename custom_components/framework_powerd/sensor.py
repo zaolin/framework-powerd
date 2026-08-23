@@ -30,12 +30,8 @@ async def async_setup_entry(
         PowerModeSensor(coordinator),
         GamePIDSensor(coordinator),
         UptimeSensor(coordinator),
-        # Power Sensors
-        PowerSensor(coordinator, "pkg_watt", "Package Power", "pkg"),
-        PowerSensor(coordinator, "cor_watt", "Core Power", "cor"),
-        PowerSensor(coordinator, "ram_watt", "RAM Power", "ram"),
+        # Power
         EstimatedTotalPowerSensor(coordinator),
-        PeripheralPowerSensor(coordinator),
         # Energy Sensors (kWh)
         EnergySensor(coordinator, "energy_24h_kwh", "Energy (24h)", "24h"),
         EnergySensor(coordinator, "energy_7d_kwh", "Energy (7 Days)", "7d"),
@@ -491,10 +487,13 @@ class OllamaModelsSensor(FrameworkEntity, SensorEntity):
     def extra_state_attributes(self):
         models = self.coordinator.data.get("ollama", {}).get("models", [])
         model_list = []
+        model_names = []
         for model in models:
+            name = model.get("name", "")
+            model_names.append(name)
             vram_bytes = model.get("size_vram", 0)
             model_list.append({
-                "name": model.get("name", ""),
+                "name": name,
                 "family": model.get("details", {}).get("family", ""),
                 "parameter_size": model.get("details", {}).get("parameter_size", ""),
                 "quantization_level": model.get("details", {}).get("quantization_level", ""),
@@ -502,7 +501,10 @@ class OllamaModelsSensor(FrameworkEntity, SensorEntity):
                 "context_length": model.get("context_length", 0),
                 "expires_at": model.get("expires_at", ""),
             })
-        return {"models": model_list}
+        return {
+            "models": model_list,
+            "model_names": ", ".join(model_names) if model_names else "None",
+        }
 
 
 class OllamaVRAMSensor(FrameworkEntity, SensorEntity):
