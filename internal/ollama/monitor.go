@@ -204,11 +204,18 @@ func (m *Monitor) recordRequest(info *RequestInfo) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	// Calculate energy: current watts × duration (hours)
+	// Calculate energy: use the estimated total watts (PkgWatt + peripherals
+	// + VRM) if available, otherwise fall back to PkgWatt + RAMWatt.
+	// Previously this used PkgWatt + CorWatt + RAMWatt which double-counted
+	// the core power (CorWatt is a subset of PkgWatt).
 	var avgWatts float64
 	if m.powerMon != nil {
 		ps := m.powerMon.GetStatus()
-		avgWatts = ps.Current.PkgWatt + ps.Current.CorWatt + ps.Current.RAMWatt
+		if ps.Current.EstimatedTotalWatts > 0 {
+			avgWatts = ps.Current.EstimatedTotalWatts
+		} else {
+			avgWatts = ps.Current.PkgWatt + ps.Current.RAMWatt
+		}
 	}
 
 	durationHours := info.Duration.Hours()

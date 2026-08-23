@@ -10,14 +10,18 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/zaolin/framework-powerd/internal/peripherals"
 )
 
 // PowerMetrics holds the current power consumption values in Watts
 type PowerMetrics struct {
-	PkgWatt float64 `json:"pkg_watt"`
-	CorWatt float64 `json:"cor_watt"`
-	GFXWatt float64 `json:"gfx_watt"`
-	RAMWatt float64 `json:"ram_watt"`
+	PkgWatt             float64 `json:"pkg_watt"`
+	CorWatt             float64 `json:"cor_watt"`
+	GFXWatt             float64 `json:"gfx_watt"`
+	RAMWatt             float64 `json:"ram_watt"`
+	EstimatedTotalWatts float64 `json:"estimated_total_watts"`
+	PeripheralWatts    float64 `json:"peripheral_watts"`
 }
 
 // PowerStatus contains the full status response
@@ -32,6 +36,14 @@ type PowerMonitor struct {
 	mu      sync.RWMutex
 	current PowerMetrics
 
+	// peripherals is the auto-detected peripheral power estimator.
+	// May be nil if not configured — in that case, only PkgWatt is used.
+	peripherals *peripherals.PeripheralEstimator
+
+	// modeProvider returns the current power mode ("performance" or "powersave")
+	// for peripheral estimation. May be nil.
+	modeProvider func() string
+
 	// History Tracking
 	// We use a ring buffer of 168 hours (7 days)
 	// hourlyEnergy[0] is the current hour being accumulated
@@ -45,6 +57,21 @@ func NewPowerMonitor() *PowerMonitor {
 	return &PowerMonitor{
 		lastHourTime: time.Now(),
 	}
+}
+
+// SetPeripherals attaches a peripheral power estimator.
+func (m *PowerMonitor) SetPeripherals(est *peripherals.PeripheralEstimator) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.peripherals = est
+}
+
+// SetModeProvider sets a callback that returns the current power mode
+// ("performance" or "powersave") for peripheral estimation.
+func (m *PowerMonitor) SetModeProvider(fn func() string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.modeProvider = fn
 }
 
 // Start begins the monitoring loop (CPU)
@@ -111,9 +138,31 @@ func (m *PowerMonitor) updateCPUMetrics(parts []string) {
 		m.current.RAMWatt = parseFloat(parts[2])
 	}
 
-	// Accumulate Energy (Sum of all sensors per user request)
-	// Energy = PkgWatt + CorWatt + RAMWatt
-	energyJoules := (m.current.PkgWatt + m.current.CorWatt + m.current.RAMWatt) * 1.0
+	// Energy accumulation: PkgWatt is the total CPU SoC package power
+	// (cores + iGPU + uncore + memory controller). CorWatt is a SUBSET
+	// of PkgWatt (just the cores) — adding it would double-count.
+	// RAMWatt is separate (DRAM DIMMs) but may be zero on AMD client CPUs.
+	//
+	// If a peripheral estimator is attached, add the estimated peripheral
+	// power (USB, NVMe, fan, WiFi, Ethernet) and apply VRM correction.
+	// Otherwise, use PkgWatt + RAMWatt as the base.
+	var energyJoules float64
+	if m.peripherals != nil && m.modeProvider != nil {
+		mode := m.modeProvider()
+		peripheralWatts := m.peripherals.EstimateWatts(mode)
+		m.current.PeripheralWatts = peripheralWatts
+
+		subtotal := m.current.PkgWatt + peripheralWatts
+		totalWatts := peripherals.ApplyVRMCorrection(subtotal, m.peripherals.VRMLossPercent())
+		m.current.EstimatedTotalWatts = totalWatts
+		energyJoules = totalWatts * 1.0
+	} else {
+		// Fallback: PkgWatt + RAMWatt (if available), no peripherals
+		base := m.current.PkgWatt + m.current.RAMWatt
+		m.current.EstimatedTotalWatts = base
+		m.current.PeripheralWatts = 0
+		energyJoules = base * 1.0
+	}
 
 	now := time.Now()
 	if now.Sub(m.lastHourTime) >= time.Hour {

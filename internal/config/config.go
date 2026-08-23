@@ -10,11 +10,12 @@ import (
 
 // Config represents the daemon configuration
 type Config struct {
-	Server  ServerConfig  `json:"server"`
-	Ollama  OllamaConfig  `json:"ollama"`
-	Pricing PricingConfig `json:"pricing"`
-	Smartd  SmartdConfig  `json:"smartd"`
-	GPU     GPUConfig     `json:"gpu"`
+	Server       ServerConfig       `json:"server"`
+	Ollama       OllamaConfig       `json:"ollama"`
+	Pricing      PricingConfig     `json:"pricing"`
+	Smartd       SmartdConfig       `json:"smartd"`
+	GPU          GPUConfig          `json:"gpu"`
+	Peripherals  PeripheralsConfig  `json:"peripherals"`
 }
 
 // ServerConfig contains server settings
@@ -65,6 +66,17 @@ type SmartdConfig struct {
 type GPUConfig struct {
 	Enabled      bool   `json:"enabled"`
 	PollInterval string `json:"poll_interval"`
+}
+
+// PeripheralsConfig holds optional overrides for the peripheral power estimator.
+// If fields are zero, the daemon auto-detects from sysfs and uses defaults.
+type PeripheralsConfig struct {
+	VRMLossPercent  float64 `json:"vrm_loss_percent"`
+	FanIdleRPM      int     `json:"fan_idle_rpm"`
+	NVMeIdleWatts  float64 `json:"nvme_idle_watts"`
+	NVMeActiveWatts float64 `json:"nvme_active_watts"`
+	WiFiIdleWatts  float64 `json:"wifi_idle_watts"`
+	WiFiActiveWatts float64 `json:"wifi_active_watts"`
 }
 
 // DefaultConfig returns the default configuration

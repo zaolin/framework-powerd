@@ -36,6 +36,8 @@ def mock_coordinator():
                 "pkg_watt": 12.5,
                 "cor_watt": 3.2,
                 "ram_watt": 1.1,
+                "estimated_total_watts": 18.2,
+                "peripheral_watts": 3.5,
             },
             "energy_24h_kwh": 0.5,
             "energy_7d_kwh": 3.5,

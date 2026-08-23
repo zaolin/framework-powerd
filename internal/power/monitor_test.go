@@ -45,18 +45,21 @@ func TestUpdateCPUMetrics_PartialFields(t *testing.T) {
 // logic: energy_joules = (PkgWatt + CorWatt + RAMWatt) * 1.0 per sample.
 func TestUpdateCPUMetrics_EnergyAccumulation(t *testing.T) {
 	m := NewPowerMonitor()
-	// Two samples of 10W each → 20 joules accumulated in the current hour slot.
-	m.updateCPUMetrics([]string{"5.0", "3.0", "2.0"}) // total 10W → 10J
-	m.updateCPUMetrics([]string{"5.0", "3.0", "2.0"}) // total 10W → 10J
+	// With the corrected formula (PkgWatt only, no CorWatt double-counting):
+	// PkgWatt=5.0, CorWatt=3.0 (subset, NOT added), RAMWatt=2.0
+	// Without a peripheral estimator attached, fallback = PkgWatt + RAMWatt = 7W
+	// Two samples → 14J accumulated.
+	m.updateCPUMetrics([]string{"5.0", "3.0", "2.0"}) // 7W → 7J
+	m.updateCPUMetrics([]string{"5.0", "3.0", "2.0"}) // 7W → 7J
 
-	// The current hour slot should have 20J.
-	// GetStatus converts to kWh: 20J / 3,600,000 = ~0.0000056 kWh.
+	// The current hour slot should have 14J.
+	// GetStatus converts to kWh: 14J / 3,600,000 = ~0.0000039 kWh.
 	status := m.GetStatus()
 	if status.Energy24hkWh <= 0 {
 		t.Errorf("Energy24hkWh = %v, expected > 0 after accumulation", status.Energy24hkWh)
 	}
-	// 20J / 3.6e6 = 5.555...e-6 kWh
-	expected := 20.0 / 3600000.0
+	// 14J / 3.6e6 = 3.888...e-6 kWh
+	expected := 14.0 / 3600000.0
 	if status.Energy24hkWh < expected*0.9 || status.Energy24hkWh > expected*1.1 {
 		t.Errorf("Energy24hkWh = %v, expected ~%v", status.Energy24hkWh, expected)
 	}

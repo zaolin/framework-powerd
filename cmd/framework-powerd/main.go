@@ -21,6 +21,7 @@ import (
 	"github.com/zaolin/framework-powerd/internal/gpu"
 	"github.com/zaolin/framework-powerd/internal/monitor"
 	"github.com/zaolin/framework-powerd/internal/ollama"
+	"github.com/zaolin/framework-powerd/internal/peripherals"
 	"github.com/zaolin/framework-powerd/internal/power"
 	"github.com/zaolin/framework-powerd/internal/smartd"
 	"github.com/zaolin/framework-powerd/internal/sysinfo"
@@ -266,6 +267,20 @@ func runServer() {
 
 	// Start Power Monitor
 	powerMon := power.NewPowerMonitor()
+
+	// Auto-detect peripherals (USB, NVMe, fan, WiFi, Ethernet) and attach
+	// the estimator + mode provider to the power monitor.
+	periphEst := peripherals.Detect(peripherals.Config{
+		VRMLossPercent:  cfg.Peripherals.VRMLossPercent,
+		FanIdleRPM:     cfg.Peripherals.FanIdleRPM,
+		NVMeIdleWatts:  cfg.Peripherals.NVMeIdleWatts,
+		NVMeActiveWatts: cfg.Peripherals.NVMeActiveWatts,
+		WiFiIdleWatts:  cfg.Peripherals.WiFiIdleWatts,
+		WiFiActiveWatts: cfg.Peripherals.WiFiActiveWatts,
+	})
+	powerMon.SetPeripherals(periphEst)
+	powerMon.SetModeProvider(pm.GetCurrentMode)
+
 	pwrCtx, pwrCancel := context.WithCancel(context.Background())
 	defer pwrCancel()
 

@@ -34,6 +34,8 @@ async def async_setup_entry(
         PowerSensor(coordinator, "pkg_watt", "Package Power", "pkg"),
         PowerSensor(coordinator, "cor_watt", "Core Power", "cor"),
         PowerSensor(coordinator, "ram_watt", "RAM Power", "ram"),
+        EstimatedTotalPowerSensor(coordinator),
+        PeripheralPowerSensor(coordinator),
         # Energy Sensors (kWh)
         EnergySensor(coordinator, "energy_24h_kwh", "Energy (24h)", "24h"),
         EnergySensor(coordinator, "energy_7d_kwh", "Energy (7 Days)", "7d"),
@@ -236,6 +238,38 @@ class EnergySensor(FrameworkEntity, SensorEntity):
     def native_value(self):
         val = self.coordinator.data.get("power", {}).get(self._key, 0)
         return round(val, 3)
+
+
+class EstimatedTotalPowerSensor(FrameworkEntity, SensorEntity):
+    """Estimated total system power: PkgWatt + peripherals + VRM correction."""
+    _attr_name = "Estimated Total Power"
+    _attr_unique_id = "power_estimated_total"
+    _attr_device_class = SensorDeviceClass.POWER
+    _attr_native_unit_of_measurement = UnitOfPower.WATT
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_icon = "mdi:flash"
+
+    @property
+    def native_value(self):
+        power_data = self.coordinator.data.get("power", {}).get("current", {})
+        val = power_data.get("estimated_total_watts", 0)
+        return round(val, 2) if val else 0
+
+
+class PeripheralPowerSensor(FrameworkEntity, SensorEntity):
+    """Estimated peripheral power: USB + NVMe + fan + WiFi + Ethernet."""
+    _attr_name = "Peripheral Power"
+    _attr_unique_id = "power_peripheral"
+    _attr_device_class = SensorDeviceClass.POWER
+    _attr_native_unit_of_measurement = UnitOfPower.WATT
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_icon = "mdi:power-plug"
+
+    @property
+    def native_value(self):
+        power_data = self.coordinator.data.get("power", {}).get("current", {})
+        val = power_data.get("peripheral_watts", 0)
+        return round(val, 2) if val else 0
 
 
 # Ollama Per-Group Sensors

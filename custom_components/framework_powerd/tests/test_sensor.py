@@ -228,3 +228,49 @@ class TestSystemInfoSensors:
 
         sensor = KernelVersionSensor(mock_coordinator)
         assert sensor._attr_unique_id == "kernel_version"
+
+
+class TestEstimatedTotalPowerSensor:
+    """Test EstimatedTotalPowerSensor."""
+
+    def test_native_value(self, mock_coordinator):
+        from custom_components.framework_powerd.sensor import EstimatedTotalPowerSensor
+
+        sensor = EstimatedTotalPowerSensor(mock_coordinator)
+        assert sensor.native_value == 18.2
+
+    def test_native_value_missing(self, mock_coordinator):
+        from custom_components.framework_powerd.sensor import EstimatedTotalPowerSensor
+
+        mock_coordinator.data["power"]["current"]["estimated_total_watts"] = 0
+        sensor = EstimatedTotalPowerSensor(mock_coordinator)
+        assert sensor.native_value == 0
+
+    def test_unique_id(self, mock_coordinator):
+        from custom_components.framework_powerd.sensor import EstimatedTotalPowerSensor
+
+        sensor = EstimatedTotalPowerSensor(mock_coordinator)
+        assert sensor._attr_unique_id == "power_estimated_total"
+
+
+class TestPeripheralPowerSensor:
+    """Test PeripheralPowerSensor."""
+
+    def test_native_value(self, mock_coordinator):
+        from custom_components.framework_powerd.sensor import PeripheralPowerSensor
+
+        sensor = PeripheralPowerSensor(mock_coordinator)
+        assert sensor.native_value == 3.5
+
+    def test_native_value_missing(self, mock_coordinator):
+        from custom_components.framework_powerd.sensor import PeripheralPowerSensor
+
+        mock_coordinator.data["power"]["current"]["peripheral_watts"] = 0
+        sensor = PeripheralPowerSensor(mock_coordinator)
+        assert sensor.native_value == 0
+
+    def test_unique_id(self, mock_coordinator):
+        from custom_components.framework_powerd.sensor import PeripheralPowerSensor
+
+        sensor = PeripheralPowerSensor(mock_coordinator)
+        assert sensor._attr_unique_id == "power_peripheral"
