@@ -204,8 +204,11 @@ func (m *Monitor) recordRequest(info *RequestInfo) {
 	// Skip the daemon's own monitoring endpoints — they are not user requests
 	// and should not reset the idle timer or inflate the request count.
 	// /api/ps and /api/version are polled by GetStats() every HA cycle (10s);
-	// without this filter they create a feedback loop that prevents idle.
-	if info.Method == "GET" && (info.Endpoint == "/api/ps" || info.Endpoint == "/api/version") {
+	// /api/tags is queried by the HA coordinator's direct Ollama fallback.
+	// Without this filter they create a feedback loop that prevents idle.
+	if info.Method == "GET" && (info.Endpoint == "/api/ps" ||
+		info.Endpoint == "/api/version" ||
+		info.Endpoint == "/api/tags") {
 		return
 	}
 

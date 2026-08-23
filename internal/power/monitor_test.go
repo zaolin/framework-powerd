@@ -11,7 +11,8 @@ import (
 // parses the PkgWatt, CorWatt, RAMWatt fields and accumulates energy.
 func TestUpdateCPUMetrics_FloatParsing(t *testing.T) {
 	m := NewPowerMonitor()
-	m.updateCPUMetrics([]string{"12.5", "3.2", "1.1"})
+	colMap := map[string]int{"PkgWatt": 0, "CorWatt": 1, "RAMWatt": 2}
+	m.updateCPUMetrics([]string{"12.5", "3.2", "1.1"}, colMap)
 
 	if m.current.PkgWatt != 12.5 {
 		t.Errorf("PkgWatt = %v, want 12.5", m.current.PkgWatt)
@@ -28,7 +29,8 @@ func TestUpdateCPUMetrics_FloatParsing(t *testing.T) {
 // than 3 fields (e.g., turbostat outputting only PkgWatt).
 func TestUpdateCPUMetrics_PartialFields(t *testing.T) {
 	m := NewPowerMonitor()
-	m.updateCPUMetrics([]string{"10.0"})
+	colMap := map[string]int{"PkgWatt": 0}
+	m.updateCPUMetrics([]string{"10.0"}, colMap)
 
 	if m.current.PkgWatt != 10.0 {
 		t.Errorf("PkgWatt = %v, want 10.0", m.current.PkgWatt)
@@ -42,15 +44,16 @@ func TestUpdateCPUMetrics_PartialFields(t *testing.T) {
 }
 
 // TestUpdateCPUMetrics_EnergyAccumulation verifies the energy accumulation
-// logic: energy_joules = (PkgWatt + CorWatt + RAMWatt) * 1.0 per sample.
+// logic: energy_joules = (PkgWatt + RAMWatt) * 1.0 per sample (no
+// peripherals attached, fallback formula).
 func TestUpdateCPUMetrics_EnergyAccumulation(t *testing.T) {
 	m := NewPowerMonitor()
-	// With the corrected formula (PkgWatt only, no CorWatt double-counting):
+	colMap := map[string]int{"PkgWatt": 0, "CorWatt": 1, "RAMWatt": 2}
 	// PkgWatt=5.0, CorWatt=3.0 (subset, NOT added), RAMWatt=2.0
-	// Without a peripheral estimator attached, fallback = PkgWatt + RAMWatt = 7W
+	// Without peripherals, fallback = PkgWatt + RAMWatt = 7W
 	// Two samples → 14J accumulated.
-	m.updateCPUMetrics([]string{"5.0", "3.0", "2.0"}) // 7W → 7J
-	m.updateCPUMetrics([]string{"5.0", "3.0", "2.0"}) // 7W → 7J
+	m.updateCPUMetrics([]string{"5.0", "3.0", "2.0"}, colMap) // 7W → 7J
+	m.updateCPUMetrics([]string{"5.0", "3.0", "2.0"}, colMap) // 7W → 7J
 
 	// The current hour slot should have 14J.
 	// GetStatus converts to kWh: 14J / 3,600,000 = ~0.0000039 kWh.
@@ -141,5 +144,78 @@ func TestGetUptimeFrom_Nonexistent(t *testing.T) {
 	got := getUptimeFrom("/nonexistent/uptime")
 	if got != "unknown" {
 		t.Errorf("uptime = %q, want unknown", got)
+	}
+}
+
+// TestUpdateCPUMetrics_AMDColumnOrder verifies header-based parsing on AMD
+// where turbostat outputs "CorWatt PkgWatt" (alphabetical), not the
+// requested "PkgWatt CorWatt RAMWatt" order. Without header-based parsing,
+// PkgWatt and CorWatt get swapped on AMD.
+func TestUpdateCPUMetrics_AMDColumnOrder(t *testing.T) {
+	m := NewPowerMonitor()
+	// AMD turbostat outputs: CorWatt PkgWatt (no RAMWatt on AMD client)
+	colMap := map[string]int{"CorWatt": 0, "PkgWatt": 1}
+	// Data line: CorWatt=0.11, PkgWatt=8.53
+	m.updateCPUMetrics([]string{"0.11", "8.53"}, colMap)
+
+	if m.current.PkgWatt != 8.53 {
+		t.Errorf("PkgWatt = %v, want 8.53 (AMD swaps column order)", m.current.PkgWatt)
+	}
+	if m.current.CorWatt != 0.11 {
+		t.Errorf("CorWatt = %v, want 0.11", m.current.CorWatt)
+	}
+	if m.current.RAMWatt != 0 {
+		t.Errorf("RAMWatt = %v, want 0 (not present on AMD)", m.current.RAMWatt)
+	}
+}
+
+// TestUpdateCPUMetrics_IntelColumnOrder verifies header-based parsing on
+// Intel where turbostat outputs "PkgWatt CorWatt RAMWatt" as requested.
+func TestUpdateCPUMetrics_IntelColumnOrder(t *testing.T) {
+	m := NewPowerMonitor()
+	colMap := map[string]int{"PkgWatt": 0, "CorWatt": 1, "RAMWatt": 2}
+	m.updateCPUMetrics([]string{"9.28", "3.2", "1.1"}, colMap)
+
+	if m.current.PkgWatt != 9.28 {
+		t.Errorf("PkgWatt = %v, want 9.28", m.current.PkgWatt)
+	}
+	if m.current.CorWatt != 3.2 {
+		t.Errorf("CorWatt = %v, want 3.2", m.current.CorWatt)
+	}
+	if m.current.RAMWatt != 1.1 {
+		t.Errorf("RAMWatt = %v, want 1.1", m.current.RAMWatt)
+	}
+}
+
+// TestUpdateCPUMetrics_MissingColumn verifies that a missing column in the
+// header (e.g. no RAMWatt on AMD) doesn't cause a panic and leaves the
+// field at 0.
+func TestUpdateCPUMetrics_MissingColumn(t *testing.T) {
+	m := NewPowerMonitor()
+	colMap := map[string]int{"CorWatt": 0, "PkgWatt": 1} // no RAMWatt
+	m.updateCPUMetrics([]string{"0.05", "8.24"}, colMap)
+
+	if m.current.PkgWatt != 8.24 {
+		t.Errorf("PkgWatt = %v, want 8.24", m.current.PkgWatt)
+	}
+	if m.current.RAMWatt != 0 {
+		t.Errorf("RAMWatt = %v, want 0 (column absent)", m.current.RAMWatt)
+	}
+}
+
+// TestUpdateCPUMetrics_AMDInference verifies that during heavy GPU load
+// (Ollama inference), PkgWatt is high and CorWatt stays low — confirming
+// the GPU power is in PkgWatt, not CorWatt.
+func TestUpdateCPUMetrics_AMDInference(t *testing.T) {
+	m := NewPowerMonitor()
+	colMap := map[string]int{"CorWatt": 0, "PkgWatt": 1}
+	// Peak inference: CorWatt=4.79, PkgWatt=112.99
+	m.updateCPUMetrics([]string{"4.79", "112.99"}, colMap)
+
+	if m.current.PkgWatt != 112.99 {
+		t.Errorf("PkgWatt = %v, want 112.99 (GPU load in PkgWatt)", m.current.PkgWatt)
+	}
+	if m.current.CorWatt != 4.79 {
+		t.Errorf("CorWatt = %v, want 4.79 (CPU cores only)", m.current.CorWatt)
 	}
 }

@@ -418,9 +418,10 @@ func TestRecordRequest_UngroupedBucket(t *testing.T) {
 }
 
 // TestRecordRequest_SkipsMonitoringEndpoints verifies that the daemon's own
-// /api/ps and /api/version GET requests are not counted as user requests.
-// Without this filter, the daemon's own monitoring polls create a feedback
-// loop that prevents idle and inflates the request count.
+// /api/ps, /api/version, and /api/tags GET requests are not counted as user
+// requests. Without this filter, the daemon's own monitoring polls and the
+// HA coordinator's direct Ollama fallback create a feedback loop that
+// prevents idle and inflates the request count.
 func TestRecordRequest_SkipsMonitoringEndpoints(t *testing.T) {
 	pm := power.NewPowerManager()
 	mon := NewMonitor(pm, nil, config.OllamaConfig{ServiceUnit: "ollama.service"}, config.PricingConfig{})
@@ -439,6 +440,14 @@ func TestRecordRequest_SkipsMonitoringEndpoints(t *testing.T) {
 		IP:        "::1",
 		Method:    "GET",
 		Endpoint:  "/api/version",
+		Status:    200,
+		Duration:  0,
+	})
+	mon.recordRequest(&RequestInfo{
+		Timestamp: time.Now(),
+		IP:        "192.168.178.100",
+		Method:    "GET",
+		Endpoint:  "/api/tags",
 		Status:    200,
 		Duration:  0,
 	})

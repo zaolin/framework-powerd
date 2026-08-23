@@ -103,14 +103,26 @@ func (m *PowerMonitor) runTurbostat(ctx context.Context) {
 	log.Println("[PowerMonitor] Started CPU monitoring (turbostat).")
 
 	scanner := bufio.NewScanner(stdout)
+
+	// Read the header line and build a column-name → index map.
+	// turbostat may output columns in a different order than requested
+	// (e.g. AMD outputs "CorWatt PkgWatt" alphabetically, not
+	// "PkgWatt CorWatt RAMWatt" as requested). Parsing by header name
+	// instead of position fixes the column-swap bug on AMD.
+	var colMap map[string]int
 	if scanner.Scan() {
-		_ = scanner.Text() // Skip header
+		header := scanner.Text()
+		cols := strings.Fields(header)
+		colMap = make(map[string]int, len(cols))
+		for i, col := range cols {
+			colMap[col] = i
+		}
 	}
 
 	for scanner.Scan() {
 		line := scanner.Text()
 		parts := strings.Fields(line)
-		m.updateCPUMetrics(parts)
+		m.updateCPUMetrics(parts, colMap)
 	}
 
 	if err := cmd.Wait(); err != nil && ctx.Err() == nil {
@@ -118,7 +130,7 @@ func (m *PowerMonitor) runTurbostat(ctx context.Context) {
 	}
 }
 
-func (m *PowerMonitor) updateCPUMetrics(parts []string) {
+func (m *PowerMonitor) updateCPUMetrics(parts []string, colMap map[string]int) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -127,16 +139,18 @@ func (m *PowerMonitor) updateCPUMetrics(parts []string) {
 		return f
 	}
 
-	// Order: PkgWatt, CorWatt, RAMWatt
-	if len(parts) > 0 {
-		m.current.PkgWatt = parseFloat(parts[0])
+	// Parse by column name (header-based), not by position.
+	// This fixes the column-swap bug where AMD turbostat outputs
+	// "CorWatt PkgWatt" (alphabetical) instead of the requested order.
+	parseCol := func(name string) float64 {
+		if idx, ok := colMap[name]; ok && idx < len(parts) {
+			return parseFloat(parts[idx])
+		}
+		return 0
 	}
-	if len(parts) > 1 {
-		m.current.CorWatt = parseFloat(parts[1])
-	}
-	if len(parts) > 2 {
-		m.current.RAMWatt = parseFloat(parts[2])
-	}
+	m.current.PkgWatt = parseCol("PkgWatt")
+	m.current.CorWatt = parseCol("CorWatt")
+	m.current.RAMWatt = parseCol("RAMWatt")
 
 	// Energy accumulation: PkgWatt is the total CPU SoC package power
 	// (cores + iGPU + uncore + memory controller). CorWatt is a SUBSET
