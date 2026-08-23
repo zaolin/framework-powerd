@@ -1,6 +1,7 @@
 """Tests for coordinator."""
 import pytest
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, AsyncMock, patch, mock_open
+import json
 
 
 class TestFrameworkPowerCoordinator:
@@ -53,3 +54,15 @@ class TestFrameworkPowerCoordinator:
         # Coordinator has update_interval from DataUpdateCoordinator
         # We can't directly test timedelta without async, but verify structure
         assert hasattr(mock_coordinator, 'update_interval')
+
+    def test_data_includes_ollama(self, mock_coordinator):
+        """Test that coordinator mock data includes ollama."""
+        assert "ollama" in mock_coordinator.data
+        assert "models" in mock_coordinator.data["ollama"]
+        assert "ollama_version" in mock_coordinator.data["ollama"]
+
+    def test_data_includes_system_info(self, mock_coordinator):
+        """Test that coordinator mock data includes system_info."""
+        assert "system_info" in mock_coordinator.data
+        assert "kernel_version" in mock_coordinator.data["system_info"]
+        assert "cpu_model" in mock_coordinator.data["system_info"]

@@ -128,11 +128,10 @@ class FrameworkPowerCoordinator(DataUpdateCoordinator):
     async def _async_update_data(self):
         """Fetch data from API endpoints."""
         try:
-            # asyncio.timeout is stdlib (Python 3.11+); replaces the fragile
-            # async_timeout package import that is not guaranteed in HA installs.
             async with asyncio.timeout(10):
                 async with aiohttp.ClientSession() as session:
-                    # Fetch main status
+                    # Fetch main status (may already include ollama data
+                    # if the daemon has Ollama monitoring enabled).
                     async with session.get(
                         f"{self.base_url}/status", headers=self.headers
                     ) as response:
@@ -140,17 +139,92 @@ class FrameworkPowerCoordinator(DataUpdateCoordinator):
                             raise UpdateFailed(f"Error fetching status: {response.status}")
                         data = await response.json()
 
-                    # Fetch Ollama stats (optional, may not be enabled)
-                    try:
-                        async with session.get(
-                            f"{self.base_url}/ollama/stats", headers=self.headers
-                        ) as response:
-                            if response.status == 200:
-                                data["ollama"] = await response.json()
-                    except Exception:
-                        pass  # Ollama monitoring not enabled
+                    # Fix 2: Only fetch /ollama/stats separately if /status
+                    # didn't already include ollama data.
+                    if "ollama" not in data:
+                        try:
+                            async with session.get(
+                                f"{self.base_url}/ollama/stats", headers=self.headers
+                            ) as response:
+                                if response.status == 200:
+                                    data["ollama"] = await response.json()
+                                else:
+                                    _LOGGER.debug(
+                                        "Ollama stats endpoint returned %d "
+                                        "(Ollama monitoring may not be enabled in the daemon config)",
+                                        response.status,
+                                    )
+                        except Exception as err:
+                            _LOGGER.debug("Ollama stats fetch failed: %s", err)
+
+                    # Fix 3: Warn once if Ollama data is still missing after
+                    # both the /status and /ollama/stats attempts.
+                    if "ollama" not in data:
+                        if not getattr(self, "_ollama_missing_warned", False):
+                            _LOGGER.warning(
+                                "Ollama data not available. Enable Ollama monitoring "
+                                "in the daemon config (ollama.enabled: true) or ensure "
+                                "Ollama is running on localhost:11434."
+                            )
+                            self._ollama_missing_warned = True
+                    else:
+                        self._ollama_missing_warned = False
+
+                    # Fix 4: Direct Ollama API fallback. If the daemon doesn't
+                    # provide Ollama data (monitoring disabled), but Ollama is
+                    # running locally, query /api/ps and /api/version directly
+                    # so the HA integration can still show running models,
+                    # VRAM usage, and version.
+                    if "ollama" not in data:
+                        ollama_data = await self._fetch_ollama_direct(session)
+                        if ollama_data is not None:
+                            data["ollama"] = ollama_data
+                            _LOGGER.info(
+                                "Ollama data fetched directly from Ollama API "
+                                "(daemon monitoring not enabled)"
+                            )
 
                     return data
         except Exception as err:
             raise UpdateFailed(f"Error communicating with API: {err}")
+
+    async def _fetch_ollama_direct(self, session: aiohttp.ClientSession) -> dict | None:
+        """Query Ollama's API directly as a fallback when the daemon doesn't
+        provide Ollama stats. Returns a dict with models, loaded_vram_bytes,
+        and ollama_version, or None if Ollama is unreachable.
+        """
+        ollama_url = "http://localhost:11434"
+        result: dict = {"models": [], "loaded_vram_bytes": 0, "ollama_version": ""}
+
+        try:
+            # /api/ps — running models
+            async with session.get(
+                f"{ollama_url}/api/ps", timeout=aiohttp.ClientTimeout(total=3)
+            ) as resp:
+                if resp.status == 200:
+                    ps_data = await resp.json()
+                    models = ps_data.get("models", [])
+                    result["models"] = models
+                    total_vram = sum(m.get("size_vram", 0) for m in models)
+                    result["loaded_vram_bytes"] = total_vram
+                else:
+                    return None
+        except Exception:
+            return None
+
+        try:
+            # /api/version — Ollama version
+            async with session.get(
+                f"{ollama_url}/api/version", timeout=aiohttp.ClientTimeout(total=3)
+            ) as resp:
+                if resp.status == 200:
+                    ver_data = await resp.json()
+                    result["ollama_version"] = ver_data.get("version", "")
+        except Exception:
+            pass  # version is optional
+
+        # Only return if we got at least the models endpoint
+        if result["models"] or result["ollama_version"]:
+            return result
+        return None
 
