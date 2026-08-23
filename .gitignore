@@ -27,5 +27,6 @@ wheels/
 htmlcov/
 nordpool_ref/
 fix_images.py
-framework-powerd
+/framework-powerd
+cmd/framework-powerd/framework-powerd
 graphify-out/

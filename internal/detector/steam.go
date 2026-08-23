@@ -155,10 +155,14 @@ func getProcessInfo(pid int) (int, string, error) {
 	if err != nil {
 		return 0, "", err
 	}
+	return parseStatLine(string(data))
+}
 
-	// Format: pid (comm) state ppid ...
-	// comm is in parentheses
-	str := string(data)
+// parseStatLine extracts the PPID and process name from a /proc/<pid>/stat
+// content string. Extracted from getProcessInfo so it is testable without
+// /proc (T5).
+func parseStatLine(stat string) (int, string, error) {
+	str := stat
 	start := strings.Index(str, "(")
 	end := strings.LastIndex(str, ")")
 	if start == -1 || end == -1 || end < start {
@@ -166,25 +170,18 @@ func getProcessInfo(pid int) (int, string, error) {
 	}
 
 	name := str[start+1 : end]
-	rest := str[end+2:] // skip ") "
-	parts := strings.Fields(rest)
-	if len(parts) < 1 {
-		return 0, "", fmt.Errorf("stat format error")
+	rest := ""
+	if end+2 < len(str) {
+		rest = str[end+2:]
+	} else if end+1 < len(str) {
+		rest = str[end+1:]
 	}
-
-	ppid, err := strconv.Atoi(parts[0]) // immediately after state char is ppid
-	// Wait, stat format: pid (comm) state ppid
-	// rest starts after ") "
-	// So first char of rest is state. Next field is ppid.
-	// Example: 123 (name) S 456 ...
-	// rest = "S 456 ..."
-	// parts[0] is state ("S"), parts[1] is ppid ("456")
-
+	parts := strings.Fields(rest)
 	if len(parts) < 2 {
 		return 0, "", fmt.Errorf("stat format error")
 	}
 
-	ppid, err = strconv.Atoi(parts[1])
+	ppid, err := strconv.Atoi(parts[1])
 	if err != nil {
 		return 0, "", err
 	}
@@ -193,22 +190,17 @@ func getProcessInfo(pid int) (int, string, error) {
 }
 
 func hasSteamAppId(pid int) bool {
-	// 1. Check /proc/<pid>/environ
-	// It is a series of "KEY=VAL\0"
 	content, err := os.ReadFile(fmt.Sprintf("/proc/%d/environ", pid))
 	if err != nil {
-		return false // process likely vanished or permission denied
+		return false
 	}
+	return environHasSteamAppId(content)
+}
 
-	// Efficient search: look for "SteamAppId=" byte sequence
-	// We handle the case where it might be at start or preceded by \0
-
-	// We specifically look for "SteamAppId="
-	// And verify it has a value.
-
-	// Convert to string for easier searching? Or bytes?
-	// Bytes is faster.
-
+// environHasSteamAppId checks whether the environ byte content contains a
+// non-empty SteamAppId= entry. Extracted from hasSteamAppId so it is testable
+// without /proc (T6).
+func environHasSteamAppId(content []byte) bool {
 	sub := []byte("SteamAppId=")
 
 	idx := bytes.Index(content, sub)
@@ -221,19 +213,15 @@ func hasSteamAppId(pid int) bool {
 		return false // e.g. "FakeSteamAppId="
 	}
 
-	// Verify it has a value after "=" until the next \0
-	// "SteamAppId=123\0"
-
 	valStart := idx + len(sub)
 	if valStart >= len(content) {
 		return false
 	}
 
-	// Check if the value is not empty (i.e., next char is not \0, or end of slice)
+	// Check if the value is not empty (i.e., next char is not \0)
 	if content[valStart] == 0 {
 		return false
 	}
 
-	// We found it!
 	return true
 }

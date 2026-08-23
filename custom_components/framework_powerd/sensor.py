@@ -81,11 +81,26 @@ async def async_setup_entry(
             GPUCPUUsageSensor(coordinator),
         ])
 
+    # Add system info sensors (always present — static data from /status)
+    sysinfo_data = coordinator.data.get("system_info", {})
+    if sysinfo_data:
+        entities.extend([
+            KernelVersionSensor(coordinator),
+            OSSensor(coordinator),
+            CPUModelSensor(coordinator),
+            TotalRAMSensor(coordinator),
+            DaemonVersionSensor(coordinator),
+        ])
+
     # Add Ollama model sensors
     ollama_data = coordinator.data.get("ollama", {})
+    if ollama_data:
+        entities.append(OllamaTotalRequestsSensor(coordinator))
     if ollama_data.get("models"):
         entities.append(OllamaModelsSensor(coordinator))
         entities.append(OllamaVRAMSensor(coordinator))
+    if ollama_data.get("ollama_version") and ollama_data.get("ollama_version") != "Unknown":
+        entities.append(OllamaVersionSensor(coordinator))
 
     async_add_entities(entities)
 
@@ -101,6 +116,20 @@ async def async_setup_entry(
         models = data.get("ollama", {}).get("models")
         if models:
             return [OllamaModelsSensor(coord), OllamaVRAMSensor(coord)]
+        return []
+
+    def _ollama_total_requests_factory(coord):
+        data = coord.data or {}
+        ollama = data.get("ollama", {})
+        if ollama and ollama.get("ungrouped", {}).get("count", 0) > 0 or ollama.get("by_group"):
+            return [OllamaTotalRequestsSensor(coord)]
+        return []
+
+    def _ollama_version_factory(coord):
+        data = coord.data or {}
+        version = data.get("ollama", {}).get("ollama_version")
+        if version and version != "Unknown":
+            return [OllamaVersionSensor(coord)]
         return []
 
     def _make_smartd_device_factory(device):
@@ -120,6 +149,8 @@ async def async_setup_entry(
         return new
 
     coordinator.register_entity_factory(_ollama_models_factory)
+    coordinator.register_entity_factory(_ollama_total_requests_factory)
+    coordinator.register_entity_factory(_ollama_version_factory)
     coordinator.register_entity_factory(_smartd_devices_factory)
     coordinator.attach_dynamic_registrar(async_add_entities)
 
@@ -409,20 +440,35 @@ class GPUCPUUsageSensor(FrameworkEntity, SensorEntity):
 # Ollama Model Sensors
 
 class OllamaModelsSensor(FrameworkEntity, SensorEntity):
-    """Ollama loaded models sensor."""
+    """Ollama loaded models sensor — shows count as native_value and per-model
+    details (name, family, parameter_size, quantization_level, vram_gib,
+    context_length) as extra_state_attributes."""
     _attr_name = "Ollama Models"
     _attr_unique_id = "ollama_models"
+    _attr_state_class = SensorStateClass.MEASUREMENT
     _attr_icon = "mdi:brain"
 
     @property
     def native_value(self):
         models = self.coordinator.data.get("ollama", {}).get("models", [])
-        return ", ".join(models) if models else "None"
+        return len(models) if models else 0
 
     @property
     def extra_state_attributes(self):
         models = self.coordinator.data.get("ollama", {}).get("models", [])
-        return {"models": models}
+        model_list = []
+        for model in models:
+            vram_bytes = model.get("size_vram", 0)
+            model_list.append({
+                "name": model.get("name", ""),
+                "family": model.get("details", {}).get("family", ""),
+                "parameter_size": model.get("details", {}).get("parameter_size", ""),
+                "quantization_level": model.get("details", {}).get("quantization_level", ""),
+                "vram_gib": round(vram_bytes / (1024**3), 2) if vram_bytes else 0,
+                "context_length": model.get("context_length", 0),
+                "expires_at": model.get("expires_at", ""),
+            })
+        return {"models": model_list}
 
 
 class OllamaVRAMSensor(FrameworkEntity, SensorEntity):
@@ -439,4 +485,103 @@ class OllamaVRAMSensor(FrameworkEntity, SensorEntity):
         ollama = self.coordinator.data.get("ollama", {})
         vram_bytes = ollama.get("loaded_vram_bytes", 0)
         return round(vram_bytes / (1024**3), 2)
+
+
+class OllamaTotalRequestsSensor(FrameworkEntity, SensorEntity):
+    """Total Ollama API requests across all groups + ungrouped."""
+    _attr_name = "Ollama Total Requests"
+    _attr_unique_id = "ollama_total_requests"
+    _attr_state_class = SensorStateClass.TOTAL_INCREASING
+    _attr_icon = "mdi:counter"
+
+    @property
+    def native_value(self):
+        ollama = self.coordinator.data.get("ollama", {})
+        total = 0
+        for stats in ollama.get("by_group", {}).values():
+            total += stats.get("count", 0)
+        total += ollama.get("ungrouped", {}).get("count", 0)
+        return total
+
+
+class OllamaVersionSensor(FrameworkEntity, SensorEntity):
+    """Ollama server version sensor."""
+    _attr_name = "Ollama Version"
+    _attr_unique_id = "ollama_version"
+    _attr_icon = "mdi:tag"
+
+    @property
+    def native_value(self):
+        return self.coordinator.data.get("ollama", {}).get("ollama_version", "Unknown")
+
+
+# System Info Sensors
+
+class KernelVersionSensor(FrameworkEntity, SensorEntity):
+    """Kernel version sensor."""
+    _attr_name = "Kernel Version"
+    _attr_unique_id = "kernel_version"
+    _attr_icon = "mdi:linux"
+
+    @property
+    def native_value(self):
+        return self.coordinator.data.get("system_info", {}).get("kernel_version", "Unknown")
+
+
+class OSSensor(FrameworkEntity, SensorEntity):
+    """Operating system sensor — shows 'Name Version' (e.g. 'Gentoo 2.18')."""
+    _attr_name = "Operating System"
+    _attr_unique_id = "operating_system"
+    _attr_icon = "mdi:desktop-classic"
+
+    @property
+    def native_value(self):
+        sysinfo = self.coordinator.data.get("system_info", {})
+        name = sysinfo.get("os_name", "")
+        version = sysinfo.get("os_version", "")
+        if name and version:
+            return f"{name} {version}"
+        return name or "Unknown"
+
+
+class CPUModelSensor(FrameworkEntity, SensorEntity):
+    """CPU model name sensor."""
+    _attr_name = "CPU Model"
+    _attr_unique_id = "cpu_model"
+    _attr_icon = "mdi:cpu-64-bit"
+
+    @property
+    def native_value(self):
+        return self.coordinator.data.get("system_info", {}).get("cpu_model", "Unknown")
+
+    @property
+    def extra_state_attributes(self):
+        sysinfo = self.coordinator.data.get("system_info", {})
+        return {"cpu_count": sysinfo.get("cpu_count", 0)}
+
+
+class TotalRAMSensor(FrameworkEntity, SensorEntity):
+    """Total system RAM sensor."""
+    _attr_name = "Total RAM"
+    _attr_unique_id = "total_ram"
+    _attr_device_class = SensorDeviceClass.DATA_SIZE
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_native_unit_of_measurement = UnitOfInformation.GIBIBYTES
+    _attr_icon = "mdi:memory"
+
+    @property
+    def native_value(self):
+        ram_bytes = self.coordinator.data.get("system_info", {}).get("total_ram_bytes", 0)
+        return round(ram_bytes / (1024**3), 2) if ram_bytes else 0
+
+
+class DaemonVersionSensor(FrameworkEntity, SensorEntity):
+    """Daemon version sensor."""
+    _attr_name = "Daemon Version"
+    _attr_unique_id = "daemon_version"
+    _attr_icon = "mdi:power-plug"
+
+    @property
+    def native_value(self):
+        return self.coordinator.data.get("system_info", {}).get("daemon_version", "Unknown")
 

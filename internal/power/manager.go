@@ -15,6 +15,7 @@ import (
 type PowerManager struct {
 	mu          sync.RWMutex
 	currentMode string
+	Debug       bool
 
 	// State Tracking
 	isIdle        bool
@@ -121,8 +122,15 @@ func (pm *PowerManager) GetStatus() Status {
 }
 
 func (pm *PowerManager) getNetworkDeviceStatus() []NetworkDeviceStatus {
+	return getNetworkDeviceStatusFromDir("/sys/class/net")
+}
+
+// getNetworkDeviceStatusFromDir scans a directory of network interfaces and
+// returns their power-control status. Extracted from getNetworkDeviceStatus
+// so it is testable with a temp directory (T2).
+func getNetworkDeviceStatusFromDir(netDir string) []NetworkDeviceStatus {
 	var statuses []NetworkDeviceStatus
-	matches, _ := filepath.Glob("/sys/class/net/*")
+	matches, _ := filepath.Glob(filepath.Join(netDir, "*"))
 	for _, ifacePath := range matches {
 		ifaceName := filepath.Base(ifacePath)
 		// Skip loopback & virtual devices (no 'device' symlink)
@@ -276,16 +284,17 @@ func (pm *PowerManager) disableNetworkPowerSave() {
 		// Write "on" to device/power/control
 		ctrlPath := filepath.Join(ifacePath, "device", "power", "control")
 		if err := os.WriteFile(ctrlPath, []byte("on"), 0644); err != nil {
-			// log.Printf("Failed to set power on for %s: %v", filepath.Base(ifacePath), err)
+			log.Printf("  -> Failed to set power on for %s: %v\n", filepath.Base(ifacePath), err)
 		}
 
 		// Use iw for wireless interfaces
-		// Try to run iw dev <iface> set power_save off
-		// We don't strictly check if it's wireless, just try running it.
-		// iw will fail harmlessly on non-wireless interfaces or if iw is missing.
 		if commandExists("iw") {
-			// Ignore output/errors as it might be ethernet
-			exec.Command("iw", "dev", filepath.Base(ifacePath), "set", "power_save", "off").Run()
+			if err := exec.Command("iw", "dev", filepath.Base(ifacePath), "set", "power_save", "off").Run(); err != nil {
+				// Expected for ethernet interfaces — only log in debug mode.
+				if pm.Debug {
+					log.Printf("  -> iw power_save off failed for %s: %v\n", filepath.Base(ifacePath), err)
+				}
+			}
 		}
 	}
 }
@@ -295,18 +304,21 @@ func (pm *PowerManager) disableLatency() {
 	log.Println("  -> Reverting USB & Audio Latency...")
 
 	// 1. Disable USB Autosuspend
-	// Iterate over /sys/bus/usb/devices/*/power/control
 	matches, _ := filepath.Glob("/sys/bus/usb/devices/*/power/control")
 	for _, path := range matches {
 		if err := os.WriteFile(path, []byte("on"), 0644); err != nil {
-			// Ignore non-writable files
+			if pm.Debug {
+				log.Printf("  -> Failed to write %s: %v\n", path, err)
+			}
 		}
 	}
 
 	// 2. Disable Audio Power Save
 	audioPath := "/sys/module/snd_hda_intel/parameters/power_save"
 	if _, err := os.Stat(audioPath); err == nil {
-		os.WriteFile(audioPath, []byte("0"), 0644)
+		if err := os.WriteFile(audioPath, []byte("0"), 0644); err != nil {
+			log.Printf("  -> Failed to disable audio power save: %v\n", err)
+		}
 	}
 }
 
@@ -357,21 +369,23 @@ func commandExists(cmd string) bool {
 }
 
 func setCPUPref(pref string) {
-	// Check if cpu0 exists
 	if _, err := os.Stat("/sys/devices/system/cpu/cpu0/cpufreq"); os.IsNotExist(err) {
 		return
 	}
-	// Write to all cpus
 	matches, _ := filepath.Glob("/sys/devices/system/cpu/cpu*/cpufreq/energy_performance_preference")
 	for _, path := range matches {
-		os.WriteFile(path, []byte(pref), 0644)
+		if err := os.WriteFile(path, []byte(pref), 0644); err != nil {
+			log.Printf("  -> Failed to set CPU pref %s: %v\n", filepath.Base(path), err)
+		}
 	}
 }
 
 func setASPM(policy string) {
 	path := "/sys/module/pcie_aspm/parameters/policy"
 	if _, err := os.Stat(path); err == nil {
-		os.WriteFile(path, []byte(policy), 0644)
+		if err := os.WriteFile(path, []byte(policy), 0644); err != nil {
+			log.Printf("  -> Failed to set ASPM policy %s: %v\n", policy, err)
+		}
 	}
 }
 

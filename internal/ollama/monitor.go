@@ -20,14 +20,16 @@ import (
 // it at a httptest.Server (A4).
 var ollamaAPIEndpoint = "http://localhost:11434/api/ps"
 
+// ollamaVersionEndpoint is the Ollama /api/version URL.
+var ollamaVersionEndpoint = "http://localhost:11434/api/version"
+
 // GIN log regex: [GIN] 2026/01/24 - 16:57:23 | 200 | 2m36s | 100.76.21.125 | POST "/api/chat"
 var ginLogRe = regexp.MustCompile(`\[GIN\] .+ \| (\d+) \|\s+([^\s]+) \|\s+([^\s]+) \| (\w+)\s+"([^"]+)"`)
 
+// psResponse matches the official Ollama /api/ps response shape.
+// See https://docs.ollama.com/api/ps
 type psResponse struct {
-	Models []struct {
-		Name     string `json:"name"`
-		SizeVRAM int64  `json:"size_vram"`
-	} `json:"models"`
+	Models []ModelInfo `json:"models"`
 }
 
 // Monitor watches Ollama logs and tracks usage statistics
@@ -74,25 +76,52 @@ func NewMonitor(pm *power.PowerManager, powerMon *power.PowerMonitor, cfg config
 	}
 }
 
+// journalReader is the minimal interface over sdjournal.Journal used by Start.
+// Extracted so Start can be tested with a mock (T3).
+type journalReader interface {
+	Wait(timeout time.Duration) int
+	Next() (uint64, error)
+	GetDataValue(field string) (string, error)
+	Close() error
+	AddMatch(match string) error
+	SeekTail() error
+	Previous() (uint64, error)
+}
+
+// realJournal wraps sdjournal.Journal to satisfy the journalReader interface.
+type realJournal struct {
+	j *sdjournal.Journal
+}
+
+func (r *realJournal) Wait(timeout time.Duration) int            { return r.j.Wait(timeout) }
+func (r *realJournal) Next() (uint64, error)                     { return r.j.Next() }
+func (r *realJournal) GetDataValue(field string) (string, error) { return r.j.GetDataValue(field) }
+func (r *realJournal) Close() error                               { return r.j.Close() }
+func (r *realJournal) AddMatch(match string) error               { return r.j.AddMatch(match) }
+func (r *realJournal) SeekTail() error                           { return r.j.SeekTail() }
+func (r *realJournal) Previous() (uint64, error)                 { return r.j.Previous() }
+
 // Start begins watching the journal for Ollama logs
 func (m *Monitor) Start(ctx context.Context) error {
 	journal, err := sdjournal.NewJournal()
 	if err != nil {
 		return err
 	}
+	return m.startWithJournal(ctx, &realJournal{j: journal})
+}
+
+// startWithJournal runs the journal read loop using an injectable journalReader.
+// Extracted from Start so it is testable with a mock reader (T3).
+func (m *Monitor) startWithJournal(ctx context.Context, journal journalReader) error {
 	defer journal.Close()
 
-	// Filter to ollama service
 	match := "_SYSTEMD_UNIT=" + m.serviceUnit
 	if err := journal.AddMatch(match); err != nil {
 		return err
 	}
-
-	// Seek to end (only watch new entries)
 	if err := journal.SeekTail(); err != nil {
 		return err
 	}
-	// Move back one so we start reading new entries
 	journal.Previous()
 
 	log.Printf("[OllamaMonitor] Watching %s logs...", m.serviceUnit)
@@ -104,13 +133,11 @@ func (m *Monitor) Start(ctx context.Context) error {
 		default:
 		}
 
-		// Wait for new entries (up to 1 second timeout to check context)
 		r := journal.Wait(time.Second)
 		if r < 0 {
 			continue
 		}
 
-		// Read all available entries
 		for {
 			n, err := journal.Next()
 			if err != nil {
@@ -225,17 +252,19 @@ func (m *Monitor) recordRequest(info *RequestInfo) {
 		info.Duration.Seconds(), energyKWh, cost, m.currency)
 }
 
-// GetStats returns the current statistics. The Ollama /api/ps poll runs OUTSIDE
-// the lock with a bounded timeout (A4) so a hung Ollama cannot stall the journal
-// reader or the HA polling cycle.
+// GetStats returns the current statistics. The Ollama /api/ps and /api/version
+// polls run OUTSIDE the lock with a bounded timeout (A4) so a hung Ollama
+// cannot stall the journal reader or the HA polling cycle.
 func (m *Monitor) GetStats() Stats {
-	// 1. Poll loaded models without holding any lock.
+	// 1. Poll loaded models and version without holding any lock.
 	models, loadedVRAM := m.pollLoadedModels()
+	version := m.pollOllamaVersion()
 
 	// 2. Apply the polled values under a short-lived write lock.
 	m.mu.Lock()
 	m.stats.Models = models
 	m.stats.LoadedVRAMBytes = loadedVRAM
+	m.stats.OllamaVersion = version
 
 	// 3. Snapshot a deep copy of the stats under the same lock.
 	stats := m.stats
@@ -253,9 +282,9 @@ func (m *Monitor) GetStats() Stats {
 }
 
 // pollLoadedModels queries Ollama's /api/ps endpoint with a bounded timeout and
-// returns the loaded model names and total VRAM bytes. Returns zero values on
+// returns the loaded model info and total VRAM bytes. Returns zero values on
 // any error (caller treats absence gracefully). No locks taken here (A4).
-func (m *Monitor) pollLoadedModels() ([]string, int64) {
+func (m *Monitor) pollLoadedModels() ([]ModelInfo, int64) {
 	req, err := http.NewRequest(http.MethodGet, ollamaAPIEndpoint, nil)
 	if err != nil {
 		return nil, 0
@@ -276,11 +305,36 @@ func (m *Monitor) pollLoadedModels() ([]string, int64) {
 		return nil, 0
 	}
 
-	models := make([]string, 0, len(psResp.Models))
 	var totalVRAM int64
 	for _, model := range psResp.Models {
-		models = append(models, model.Name)
 		totalVRAM += model.SizeVRAM
 	}
-	return models, totalVRAM
+	return psResp.Models, totalVRAM
+}
+
+// pollOllamaVersion queries Ollama's /api/version endpoint and returns the
+// version string. Returns "" on any error (caller treats absence gracefully).
+func (m *Monitor) pollOllamaVersion() string {
+	req, err := http.NewRequest(http.MethodGet, ollamaVersionEndpoint, nil)
+	if err != nil {
+		return ""
+	}
+
+	resp, err := m.httpClient.Do(req)
+	if err != nil {
+		return ""
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return ""
+	}
+
+	var versionResp struct {
+		Version string `json:"version"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&versionResp); err != nil {
+		return ""
+	}
+	return versionResp.Version
 }

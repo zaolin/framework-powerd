@@ -3,17 +3,24 @@ package api
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"strings"
+	"sync"
 
 	"github.com/zaolin/framework-powerd/internal/gpu"
 	"github.com/zaolin/framework-powerd/internal/ollama"
 	"github.com/zaolin/framework-powerd/internal/power"
 	"github.com/zaolin/framework-powerd/internal/smartd"
+	"github.com/zaolin/framework-powerd/internal/sysinfo"
 
 	"github.com/golang-jwt/jwt/v5"
+	"golang.org/x/time/rate"
 )
+
+// maxRequestBody limits JSON body size to prevent memory exhaustion (S4).
+const maxRequestBody = 1 << 20 // 1 MiB
 
 // StatusResponse represents the system status
 type StatusResponse struct {
@@ -31,6 +38,7 @@ type StatusResponse struct {
 	Ollama           *ollama.Stats               `json:"ollama,omitempty"`
 	Smartd           *smartd.Stats               `json:"smartd,omitempty"`
 	GPU              *gpu.Stats                  `json:"gpu,omitempty"`
+	SystemInfo       sysinfo.SystemInfo          `json:"system_info"`
 }
 
 // Server handles API requests
@@ -41,10 +49,15 @@ type Server struct {
 	smartdMonitor *smartd.Monitor
 	gpuMonitor    *gpu.Monitor
 	jwtSecret     []byte
+	sysInfo       sysinfo.SystemInfo
+
+	// rateLimiter per-client token bucket for /mode and /activity (S9).
+	rateMu      sync.Mutex
+	rateBuckets map[string]*rate.Limiter
 }
 
 // NewServer creates a new API server
-func NewServer(pm *power.PowerManager, monitor *power.PowerMonitor, jwtSecret string, ollamaMon *ollama.Monitor, smartdMon *smartd.Monitor, gpuMon *gpu.Monitor) *Server {
+func NewServer(pm *power.PowerManager, monitor *power.PowerMonitor, jwtSecret string, ollamaMon *ollama.Monitor, smartdMon *smartd.Monitor, gpuMon *gpu.Monitor, sysInfo sysinfo.SystemInfo) *Server {
 	return &Server{
 		pm:            pm,
 		powerMonitor:  monitor,
@@ -52,14 +65,20 @@ func NewServer(pm *power.PowerManager, monitor *power.PowerMonitor, jwtSecret st
 		smartdMonitor: smartdMon,
 		gpuMonitor:    gpuMon,
 		jwtSecret:     []byte(jwtSecret),
+		sysInfo:       sysInfo,
+		rateBuckets:   make(map[string]*rate.Limiter),
 	}
 }
 
+// jwtClaims is the typed claims struct enforced by ParseWithClaims (S6).
+type jwtClaims struct {
+	Authorized bool `json:"authorized"`
+	jwt.RegisteredClaims
+}
+
+// AuthMiddleware validates a JWT Bearer token with strict claim enforcement (S6, S7).
 func (s *Server) AuthMiddleware(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		// allow localhost without auth for backward compatibility or ease of use?
-		// User asked for "jwt authentication", usually implies enforcement.
-		// Let's enforce it if a secret is configured.
 		if len(s.jwtSecret) == 0 {
 			next(w, r)
 			return
@@ -67,30 +86,65 @@ func (s *Server) AuthMiddleware(next http.HandlerFunc) http.HandlerFunc {
 
 		authHeader := r.Header.Get("Authorization")
 		if authHeader == "" {
-			http.Error(w, "Missing Authorization header", http.StatusUnauthorized)
+			http.Error(w, "Unauthorized", http.StatusUnauthorized)
 			return
 		}
 
+		// S7: Enforce Bearer scheme — reject non-Bearer headers explicitly.
+		if !strings.HasPrefix(authHeader, "Bearer ") {
+			http.Error(w, "Unauthorized", http.StatusUnauthorized)
+			return
+		}
 		tokenString := strings.TrimSpace(strings.TrimPrefix(authHeader, "Bearer "))
-		token, err := jwt.Parse(tokenString, func(token *jwt.Token) (interface{}, error) {
+
+		// S6: ParseWithClaims with a typed claims struct. jwt/v5 validates
+		// exp/nbf/iat automatically via RegisteredClaims; we additionally
+		// require the "authorized" claim to be true.
+		claims := &jwtClaims{}
+		token, err := jwt.ParseWithClaims(tokenString, claims, func(token *jwt.Token) (interface{}, error) {
 			if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
 				return nil, fmt.Errorf("unexpected signing method: %v", token.Header["alg"])
 			}
 			return s.jwtSecret, nil
 		})
 
-		if err != nil {
-			log.Printf("Auth Error: %v", err)
-			http.Error(w, fmt.Sprintf("Invalid token: %v", err), http.StatusUnauthorized)
+		if err != nil || !token.Valid {
+			// S12+S17: Log the real error server-side; return generic message.
+			if err != nil {
+				log.Printf("Auth error: %v", err)
+			}
+			http.Error(w, "Unauthorized", http.StatusUnauthorized)
 			return
 		}
 
-		if !token.Valid {
-			log.Println("Auth Error: Token invalid")
-			http.Error(w, "Invalid token", http.StatusUnauthorized)
+		// S6: Enforce the "authorized" claim.
+		if !claims.Authorized {
+			log.Println("Auth error: token missing 'authorized' claim")
+			http.Error(w, "Unauthorized", http.StatusUnauthorized)
 			return
 		}
 
+		next(w, r)
+	}
+}
+
+// RateLimit returns a per-client rate limiter middleware (S9). Allows 1
+// request/sec with a burst of 5.
+func (s *Server) RateLimit(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		clientIP := r.RemoteAddr
+		s.rateMu.Lock()
+		limiter, ok := s.rateBuckets[clientIP]
+		if !ok {
+			limiter = rate.NewLimiter(rate.Limit(1), 5)
+			s.rateBuckets[clientIP] = limiter
+		}
+		s.rateMu.Unlock()
+
+		if !limiter.Allow() {
+			http.Error(w, "Rate limit exceeded", http.StatusTooManyRequests)
+			return
+		}
 		next(w, r)
 	}
 }
@@ -104,6 +158,9 @@ func (s *Server) HandleMode(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
+
+	// S4: Limit body size.
+	r.Body = http.MaxBytesReader(w, r.Body, maxRequestBody)
 
 	var req ModeRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -123,9 +180,11 @@ func (s *Server) HandleMode(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err != nil {
+		// S12: Log details server-side, return generic message.
+		log.Printf("HandleMode: failed to set mode %q: %v", req.Mode, err)
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusInternalServerError)
-		json.NewEncoder(w).Encode(map[string]string{"error": fmt.Sprintf("Failed to set mode: %v", err)})
+		json.NewEncoder(w).Encode(map[string]string{"error": "Failed to set mode"})
 		return
 	}
 
@@ -135,6 +194,12 @@ func (s *Server) HandleMode(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) HandleStatus(w http.ResponseWriter, r *http.Request) {
+	// S14: Enforce GET method.
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
 	status := s.pm.GetStatus()
 
 	resp := StatusResponse{
@@ -149,21 +214,17 @@ func (s *Server) HandleStatus(w http.ResponseWriter, r *http.Request) {
 		UptimeSeconds:    power.GetUptimeSeconds(),
 		Power:            s.powerMonitor.GetStatus(),
 		NetworkDevices:   status.NetworkDevices,
+		SystemInfo:       s.sysInfo,
 	}
 
-	// Include Ollama stats if enabled
 	if s.ollamaMonitor != nil {
 		stats := s.ollamaMonitor.GetStats()
 		resp.Ollama = &stats
 	}
-
-	// Include Smartd stats if enabled
 	if s.smartdMonitor != nil {
 		stats := s.smartdMonitor.GetStats()
 		resp.Smartd = &stats
 	}
-
-	// Include GPU stats if enabled
 	if s.gpuMonitor != nil {
 		stats := s.gpuMonitor.GetStats()
 		resp.GPU = &stats
@@ -179,6 +240,10 @@ func (s *Server) HandleActivity(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// S4: Drain and limit body even though we don't read it.
+	r.Body = http.MaxBytesReader(w, r.Body, maxRequestBody)
+	io.Copy(io.Discard, r.Body)
+
 	s.pm.TriggerActivity()
 
 	w.Header().Set("Content-Type", "application/json")
@@ -188,6 +253,10 @@ func (s *Server) HandleActivity(w http.ResponseWriter, r *http.Request) {
 
 // HandleOllamaStats returns Ollama usage statistics
 func (s *Server) HandleOllamaStats(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
 	if s.ollamaMonitor == nil {
 		http.Error(w, "Ollama monitoring not enabled", http.StatusNotFound)
 		return
@@ -199,6 +268,10 @@ func (s *Server) HandleOllamaStats(w http.ResponseWriter, r *http.Request) {
 
 // HandleSmartdStats returns SMART health statistics
 func (s *Server) HandleSmartdStats(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
 	if s.smartdMonitor == nil {
 		http.Error(w, "Smartd monitoring not enabled", http.StatusNotFound)
 		return

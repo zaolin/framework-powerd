@@ -157,7 +157,13 @@ func (m *PowerMonitor) GetStatus() PowerStatus {
 
 // GetUptimeSeconds returns the system uptime in seconds
 func GetUptimeSeconds() float64 {
-	data, err := os.ReadFile("/proc/uptime")
+	return getUptimeSecondsFrom("/proc/uptime")
+}
+
+// getUptimeSecondsFrom reads uptime from the given path and returns seconds.
+// Extracted so it is testable with a temp file (T3).
+func getUptimeSecondsFrom(procPath string) float64 {
+	data, err := os.ReadFile(procPath)
 	if err != nil {
 		return 0
 	}
@@ -177,21 +183,16 @@ func GetUptimeSeconds() float64 {
 
 // GetUptime returns the system uptime as a formatted string
 func GetUptime() string {
-	data, err := os.ReadFile("/proc/uptime")
-	if err != nil {
+	return getUptimeFrom("/proc/uptime")
+}
+
+// getUptimeFrom reads uptime from the given path and returns a formatted
+// duration string. Extracted so it is testable (T3).
+func getUptimeFrom(procPath string) string {
+	secs := getUptimeSecondsFrom(procPath)
+	if secs == 0 {
 		return "unknown"
 	}
-
-	parts := strings.Fields(string(data))
-	if len(parts) == 0 {
-		return "unknown"
-	}
-
-	secs, err := strconv.ParseFloat(parts[0], 64)
-	if err != nil {
-		return "unknown"
-	}
-
 	d := time.Duration(secs) * time.Second
-	return d.String() // e.g. "123h45m10s"
+	return d.String()
 }

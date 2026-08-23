@@ -26,7 +26,7 @@ type Monitor struct {
 }
 
 func NewMonitor(cfg config.GPUConfig) (*Monitor, error) {
-	devicePath, err := findAMDGPUPath()
+	devicePath, err := findAMDGPUPath("/sys/class/drm")
 	if err != nil {
 		return nil, fmt.Errorf("failed to find AMD GPU: %w", err)
 	}
@@ -51,10 +51,12 @@ func NewMonitor(cfg config.GPUConfig) (*Monitor, error) {
 	}, nil
 }
 
-func findAMDGPUPath() (string, error) {
-	entries, err := os.ReadDir("/sys/class/drm")
+// findAMDGPUPath scans a drm base directory for an AMD GPU (vendor 0x1002).
+// Takes baseDir as a parameter so it is testable with a temp directory (T9).
+func findAMDGPUPath(baseDir string) (string, error) {
+	entries, err := os.ReadDir(baseDir)
 	if err != nil {
-		return "", fmt.Errorf("failed to read /sys/class/drm: %w", err)
+		return "", fmt.Errorf("failed to read %s: %w", baseDir, err)
 	}
 
 	for _, e := range entries {
@@ -62,7 +64,7 @@ func findAMDGPUPath() (string, error) {
 			continue
 		}
 
-		devicePath := filepath.Join("/sys/class/drm", e.Name(), "device")
+		devicePath := filepath.Join(baseDir, e.Name(), "device")
 
 		vendorPath := filepath.Join(devicePath, "vendor")
 		vendor, err := os.ReadFile(vendorPath)
@@ -75,7 +77,7 @@ func findAMDGPUPath() (string, error) {
 		}
 	}
 
-	return "", errors.New("AMD GPU not found in /sys/class/drm")
+	return "", errors.New("AMD GPU not found in " + baseDir)
 }
 
 func findHwmonPath(devicePath string) (string, error) {
@@ -153,15 +155,20 @@ func (m *Monitor) readTemperature() int {
 	if m.hwmonPath == "" {
 		return 0
 	}
-
 	entries, err := os.ReadDir(m.hwmonPath)
 	if err != nil {
 		return 0
 	}
+	return parseTemperatureFromEntries(entries, m.hwmonPath)
+}
 
+// parseTemperatureFromEntries scans hwmon dir entries for a temp*_input file,
+// reads it, and returns the value in degrees Celsius (divided by 1000).
+// Extracted from readTemperature so it is testable with fixture data (T9).
+func parseTemperatureFromEntries(entries []os.DirEntry, hwmonPath string) int {
 	for _, e := range entries {
 		if strings.HasSuffix(e.Name(), "_input") && strings.HasPrefix(e.Name(), "temp") {
-			data, err := os.ReadFile(filepath.Join(m.hwmonPath, e.Name()))
+			data, err := os.ReadFile(filepath.Join(hwmonPath, e.Name()))
 			if err != nil {
 				continue
 			}
@@ -169,7 +176,6 @@ func (m *Monitor) readTemperature() int {
 			return int(val / 1000)
 		}
 	}
-
 	return 0
 }
 
@@ -177,15 +183,20 @@ func (m *Monitor) readPower() float64 {
 	if m.hwmonPath == "" {
 		return 0
 	}
-
 	entries, err := os.ReadDir(m.hwmonPath)
 	if err != nil {
 		return 0
 	}
+	return parsePowerFromEntries(entries, m.hwmonPath)
+}
 
+// parsePowerFromEntries scans hwmon dir entries for a power*_average file,
+// reads it, and returns the value in Watts (divided by 1,000,000).
+// Extracted from readPower so it is testable with fixture data (T9).
+func parsePowerFromEntries(entries []os.DirEntry, hwmonPath string) float64 {
 	for _, e := range entries {
 		if strings.HasSuffix(e.Name(), "_average") && strings.HasPrefix(e.Name(), "power") {
-			data, err := os.ReadFile(filepath.Join(m.hwmonPath, e.Name()))
+			data, err := os.ReadFile(filepath.Join(hwmonPath, e.Name()))
 			if err != nil {
 				continue
 			}
@@ -193,7 +204,6 @@ func (m *Monitor) readPower() float64 {
 			return float64(val) / 1000000.0
 		}
 	}
-
 	return 0
 }
 
@@ -210,6 +220,13 @@ func (m *Monitor) calculateCPUUsageLocked() float64 {
 	}
 
 	line := scanner.Text()
+	return m.calculateCPUUsageFromLine(line)
+}
+
+// calculateCPUUsageFromLine parses a single /proc/stat "cpu " line, updates the
+// monitor's CPU stats, and returns the usage percentage since the last call.
+// Extracted from calculateCPUUsageLocked so it is testable with fixture data (T9).
+func (m *Monitor) calculateCPUUsageFromLine(line string) float64 {
 	if !strings.HasPrefix(line, "cpu ") {
 		return 0
 	}

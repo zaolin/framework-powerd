@@ -35,18 +35,61 @@ func (p *ProcessPauser) Pause(rootPID int) error {
 		return fmt.Errorf("invalid pid %d", rootPID)
 	}
 
+	// S5: Safety guard — never pause PID 1 (init/systemd), the daemon's own
+	// PID, or any ancestor of the daemon. Pausing init would freeze the
+	// entire system; pausing the daemon would deadlock it.
+	if rootPID == 1 {
+		return fmt.Errorf("refusing to pause PID 1 (init)")
+	}
+	if rootPID == os.Getpid() {
+		return fmt.Errorf("refusing to pause self (PID %d)", rootPID)
+	}
+	if isAncestorOf(rootPID, os.Getpid()) {
+		return fmt.Errorf("refusing to pause ancestor PID %d of the daemon", rootPID)
+	}
+
 	// Find *all* descendants
 	descendants := findAllDescendants(rootPID)
 	targets := append([]int{rootPID}, descendants...)
 
+	// S5: Filter out PID 1 and the daemon's own PID from descendants too.
+	daemonPID := os.Getpid()
+	safe := targets[:0]
+	for _, pid := range targets {
+		if pid == 1 || pid == daemonPID {
+			log.Printf("[Pauser] Skipping unsafe PID %d in target list", pid)
+			continue
+		}
+		safe = append(safe, pid)
+	}
+	targets = safe
+
+	if len(targets) == 0 {
+		return fmt.Errorf("no safe targets to pause after filtering PID 1/self")
+	}
+
 	log.Printf("[Pauser] Suspending Process Tree (Root: %d, Count: %d)...", rootPID, len(targets))
 
+	// S11: TOCTOU mitigation — re-validate that each target PID's PPID
+	// chain still leads back to rootPID before signaling. A PID may have
+	// exited and been reused between findAllDescendants and now.
+	// This is best-effort (the race window still exists, just narrower);
+	// a full fix would use pidfd_open (Linux 5.3+).
+	rootPPID := getRootPPID(rootPID)
 	for _, pid := range targets {
+		if pid == rootPID {
+			continue
+		}
+		if !isDescendantOf(pid, rootPID, rootPPID) {
+			log.Printf("[Pauser] Skipping PID %d: PPID chain no longer leads to root %d (possible PID reuse)\n", pid, rootPID)
+			continue
+		}
 		if err := syscall.Kill(pid, syscall.SIGSTOP); err != nil {
 			// Log but continue
-			// log.Printf("Failed to pause pid %d: %v", pid, err)
 		}
 	}
+	// Always SIGSTOP the root.
+	syscall.Kill(rootPID, syscall.SIGSTOP)
 
 	p.isPaused = true
 	p.pausedPIDs = targets
@@ -144,13 +187,17 @@ func processState(pid int) (string, error) {
 	return fields[0], nil
 }
 
-// findAllDescendants brute-force scans /proc to find all children recursively
-// This is somewhat expensive but robustness is key here.
+// findAllDescendants brute-force scans /proc to find all children recursively.
+// Takes procRoot (default "/proc") so it is testable with a temp directory (T3).
 func findAllDescendants(root int) []int {
+	return findAllDescendantsFromProc(root, "/proc")
+}
+
+func findAllDescendantsFromProc(root int, procRoot string) []int {
 	// 1. Build a map of PPID -> []PID
 	tree := make(map[int][]int)
 
-	entries, err := os.ReadDir("/proc")
+	entries, err := os.ReadDir(procRoot)
 	if err != nil {
 		return nil
 	}
@@ -164,12 +211,7 @@ func findAllDescendants(root int) []int {
 			continue
 		}
 
-		// Read Stat to get PPID
-		// Using a simplified scanner since we just need the 4th field (usually)
-		// But wait, comm can contain spaces and parens.
-		// Let's reuse a simple parser logic here or duplicate it to avoid circular dependency (detector package has it)
-		// Simpler: Just read /proc/<pid>/stat
-		data, err := os.ReadFile(fmt.Sprintf("/proc/%d/stat", pid))
+		data, err := os.ReadFile(fmt.Sprintf("%s/%d/stat", procRoot, pid))
 		if err != nil {
 			continue
 		}
@@ -207,4 +249,103 @@ func findAllDescendants(root int) []int {
 	}
 
 	return results
+}
+
+// getRootPPID returns the PPID of rootPID (used as a quick consistency check).
+func getRootPPID(rootPID int) int {
+	return getRootPPIDFromProc(rootPID, "/proc")
+}
+
+func getRootPPIDFromProc(rootPID int, procRoot string) int {
+	ppid, _, err := readPPIDAndNameFromProc(rootPID, procRoot)
+	if err != nil {
+		return -1
+	}
+	return ppid
+}
+
+// isDescendantOf walks the PPID chain of pid and returns true if it reaches
+// rootPID (or rootPPID, as a shortcut). Bounded to 20 levels to prevent loops.
+func isDescendantOf(pid, rootPID, rootPPID int) bool {
+	return isDescendantOfProc(pid, rootPID, rootPPID, "/proc")
+}
+
+func isDescendantOfProc(pid, rootPID, rootPPID int, procRoot string) bool {
+	current := pid
+	for i := 0; i < 20; i++ {
+		ppid, _, err := readPPIDAndNameFromProc(current, procRoot)
+		if err != nil {
+			return false
+		}
+		if ppid == rootPID || (rootPPID > 0 && ppid == rootPPID) {
+			return true
+		}
+		if ppid <= 1 {
+			return false
+		}
+		current = ppid
+	}
+	return false
+}
+
+// isAncestorOf walks the PPID chain of descendant and returns true if
+// ancestor appears in it. Used by Pause to prevent the daemon from
+// pausing its own parent chain (S5).
+func isAncestorOf(ancestor, descendant int) bool {
+	return isAncestorOfProc(ancestor, descendant, "/proc")
+}
+
+func isAncestorOfProc(ancestor, descendant int, procRoot string) bool {
+	current := descendant
+	for i := 0; i < 20; i++ { // bounded walk to prevent loops
+		ppid, _, err := readPPIDAndNameFromProc(current, procRoot)
+		if err != nil {
+			return false
+		}
+		if ppid == ancestor {
+			return true
+		}
+		if ppid <= 1 {
+			return false
+		}
+		current = ppid
+	}
+	return false
+}
+
+// getProcessPPIDAndName reads /proc/<pid>/stat and returns the PPID and
+// process name. Shared by isAncestorOf and the detector package's
+// getProcessInfo (which has its own copy — future consolidation target).
+func getProcessPPIDAndName(pid int) (int, string, error) {
+	return readPPIDAndNameFromProc(pid, "/proc")
+}
+
+// readPPIDAndNameFromProc reads /<procRoot>/<pid>/stat and returns the PPID
+// and process name. Takes procRoot so it is testable with a temp directory (T3).
+func readPPIDAndNameFromProc(pid int, procRoot string) (int, string, error) {
+	data, err := os.ReadFile(fmt.Sprintf("%s/%d/stat", procRoot, pid))
+	if err != nil {
+		return 0, "", err
+	}
+
+	str := string(data)
+	start := strings.Index(str, "(")
+	end := strings.LastIndex(str, ")")
+	if start == -1 || end == -1 || end < start {
+		return 0, "", fmt.Errorf("parse error")
+	}
+
+	name := str[start+1 : end]
+	rest := str[end+2:]
+	parts := strings.Fields(rest)
+	if len(parts) < 2 {
+		return 0, "", fmt.Errorf("stat format error")
+	}
+
+	ppid, err := strconv.Atoi(parts[1])
+	if err != nil {
+		return 0, "", err
+	}
+
+	return ppid, name, nil
 }

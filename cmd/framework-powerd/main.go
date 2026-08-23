@@ -23,16 +23,18 @@ import (
 	"github.com/zaolin/framework-powerd/internal/ollama"
 	"github.com/zaolin/framework-powerd/internal/power"
 	"github.com/zaolin/framework-powerd/internal/smartd"
+	"github.com/zaolin/framework-powerd/internal/sysinfo"
 )
 
 var CLI struct {
 	Serve struct {
-		Config      string        `help:"Path to config file" type:"path" name:"config" short:"c"`
-		Port        int           `help:"Port to listen on" default:"8080"`
-		Address     string        `help:"Address to listen on" default:"localhost"`
-		JWTSecret   string        `help:"Secret key for JWT authentication" env:"JWT_SECRET" name:"jwt-secret"`
-		Debug       bool          `help:"Enable verbose logging" short:"d"`
-		IdleTimeout time.Duration `help:"Time before entering idle mode" default:"5m"`
+		Config       string        `help:"Path to config file" type:"path" name:"config" short:"c"`
+		Port         int           `help:"Port to listen on" default:"8080"`
+		Address      string        `help:"Address to listen on" default:"localhost"`
+		JWTSecret    string        `help:"Secret key for JWT authentication" env:"JWT_SECRET" name:"jwt-secret"`
+		DisableAuth  bool           `help:"Disable JWT authentication (INSECURE — exposes control plane without auth)" name:"disable-auth"`
+		Debug        bool          `help:"Enable verbose logging" short:"d"`
+		IdleTimeout  time.Duration `help:"Time before entering idle mode" default:"5m"`
 	} `cmd:"" help:"Start the power daemon"`
 
 	Token struct {
@@ -97,6 +99,18 @@ func runServer() {
 		cfg.Server.IdleTimeout = CLI.Serve.IdleTimeout.String()
 	}
 
+	// S2: Fail-closed auth. The daemon controls power profiles and process
+	// SIGSTOP/SIGCONT — its API is a control plane. Require an explicit opt-in
+	// to run without authentication.
+	jwtSecret := strings.TrimSpace(cfg.Server.JWTSecret)
+	if jwtSecret == "" && !CLI.Serve.DisableAuth {
+		log.Fatal("JWT secret required: set --jwt-secret (or JWT_SECRET env), or pass --disable-auth to run without authentication (INSECURE).")
+	}
+	authEnabled := jwtSecret != ""
+	if !authEnabled {
+		log.Println("WARNING: Authentication disabled via --disable-auth. The API is unauthenticated — bind to localhost only!")
+	}
+
 	pm := power.NewPowerManager()
 
 	if err := pm.ValidateTools(); err != nil {
@@ -120,32 +134,14 @@ func runServer() {
 	// Logic handler
 	updatePowerState := func() {
 		st := state.snapshot()
+		d := decidePowerMode(st, pauser.IsPaused())
 
-		// New Priority:
-		// 1. Idle -> Power Saver (AND Pause Game if running)
-		// 2. Active (Input Detected) -> Performance (AND Resume Game if running)
-
-		// Refined Priority based on User Feedback:
-		// "remote play and a game is active then ignore idle"
-
-		shouldIdle := st.isIdle
-
-		if st.isRemotePlay && st.isGameRunning {
-			if st.isIdle {
-				log.Println("[PowerLogic] System Idle, but Remote Play & Game Active. Keeping Performance.")
-			}
-			shouldIdle = false
-		}
-
-		if shouldIdle {
+		if d.shouldIdle {
 			log.Println("[PowerLogic] System Idle (No Input). Force Power Saver.")
 
-			// Pause Game if running
-			if st.isGameRunning && st.gamePID > 0 {
-				if !pauser.IsPaused() {
-					if err := pauser.Pause(st.gamePID); err != nil {
-						log.Printf("Failed to pause game: %v\n", err)
-					}
+			if d.shouldPause {
+				if err := pauser.Pause(st.gamePID); err != nil {
+					log.Printf("Failed to pause game: %v\n", err)
 				}
 			}
 
@@ -153,20 +149,18 @@ func runServer() {
 				log.Printf("Failed to set powersave: %v\n", err)
 			}
 		} else {
-			// System Active
-			// Resume Game if paused
-			if pauser.IsPaused() {
+			if d.shouldResume {
 				if err := pauser.Resume(); err != nil {
 					log.Printf("Failed to resume game: %v\n", err)
 				}
 			}
 
-			if st.isGameRunning || st.isRemotePlay {
+			if d.shouldPerf {
 				log.Println("[PowerLogic] Active Usage (Game/Remote). Force Performance.")
 				if err := pm.SetPerformance("Game/Remote Active"); err != nil {
 					log.Printf("Failed to set performance: %v\n", err)
 				}
-			} else {
+			} else if d.shouldDefault {
 				log.Println("[PowerLogic] Active Usage (Desktop). Set Default Active.")
 				if err := pm.SetDefaultActive(); err != nil {
 					log.Printf("Failed to set default active: %v\n", err)
@@ -333,40 +327,74 @@ func runServer() {
 		}
 	}
 
-	// Start API Server
-	jwtSecret := strings.TrimSpace(cfg.Server.JWTSecret)
-	apiServer := api.NewServer(pm, powerMon, jwtSecret, ollamaMonitor, smartdMonitor, gpuMonitor)
+	// Start API Server (S3+S8: dedicated mux, explicit timeouts, body limits)
+	// Collect static system info once at startup.
+	sysInfo := sysinfo.Collect()
 
-	// Apply middleware if secret is set
-	if jwtSecret != "" {
+	apiServer := api.NewServer(pm, powerMon, jwtSecret, ollamaMonitor, smartdMonitor, gpuMonitor, sysInfo)
+
+	mux := http.NewServeMux()
+
+	// Rate-limited + auth-wrapped handlers for the control plane.
+	modeHandler := apiServer.AuthMiddleware(apiServer.RateLimit(apiServer.HandleMode))
+	activityHandler := apiServer.AuthMiddleware(apiServer.RateLimit(apiServer.HandleActivity))
+	statusHandler := apiServer.AuthMiddleware(apiServer.HandleStatus)
+	statsHandler := apiServer.AuthMiddleware(apiServer.HandleOllamaStats)
+	smartdHandler := apiServer.AuthMiddleware(apiServer.HandleSmartdStats)
+
+	// When auth is disabled (--disable-auth), AuthMiddleware passes through.
+	if authEnabled {
 		log.Println("JWT Authentication enabled")
-		http.HandleFunc("/mode", apiServer.AuthMiddleware(apiServer.HandleMode))
-		http.HandleFunc("/status", apiServer.AuthMiddleware(apiServer.HandleStatus))
-		http.HandleFunc("/activity", apiServer.AuthMiddleware(apiServer.HandleActivity))
-		http.HandleFunc("/ollama/stats", apiServer.AuthMiddleware(apiServer.HandleOllamaStats))
-		http.HandleFunc("/smartd/stats", apiServer.AuthMiddleware(apiServer.HandleSmartdStats))
 	} else {
-		log.Println("Warning: JWT Authentication disabled (no secret provided)")
-		http.HandleFunc("/mode", apiServer.HandleMode)
-		http.HandleFunc("/status", apiServer.HandleStatus)
-		http.HandleFunc("/activity", apiServer.HandleActivity)
-		http.HandleFunc("/ollama/stats", apiServer.HandleOllamaStats)
-		http.HandleFunc("/smartd/stats", apiServer.HandleSmartdStats)
+		log.Println("WARNING: Authentication disabled. API is unauthenticated.")
 	}
+
+	mux.HandleFunc("/mode", modeHandler)
+	mux.HandleFunc("/status", statusHandler)
+	mux.HandleFunc("/activity", activityHandler)
+	mux.HandleFunc("/ollama/stats", statsHandler)
+	mux.HandleFunc("/smartd/stats", smartdHandler)
+	// S8: 404 catch-all for unmatched paths.
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		http.NotFound(w, r)
+	})
+
+	addr := fmt.Sprintf("%s:%d", cfg.Server.Address, cfg.Server.Port)
+	srv := &http.Server{
+		Addr:              addr,
+		Handler:           mux,
+		ReadHeaderTimeout: 10 * time.Second, // S3: slowloris protection
+		ReadTimeout:       20 * time.Second,
+		WriteTimeout:      30 * time.Second,
+		IdleTimeout:       60 * time.Second,
+	}
+
+	// R2+R3: Graceful shutdown. Run the server in a goroutine; on signal,
+	// call srv.Shutdown with a bounded timeout instead of log.Fatalf.
+	serverErr := make(chan error, 1)
+	go func() {
+		log.Printf("Listening on %s...\n", addr)
+		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			serverErr <- err
+		}
+	}()
 
 	stop := make(chan os.Signal, 1)
 	signal.Notify(stop, syscall.SIGINT, syscall.SIGTERM)
 
-	go func() {
-		addr := fmt.Sprintf("%s:%d", cfg.Server.Address, cfg.Server.Port)
-		log.Printf("Listening on %s...\n", addr)
-		if err := http.ListenAndServe(addr, nil); err != nil {
-			log.Fatalf("HTTP server error: %v", err)
-		}
-	}()
+	select {
+	case err := <-serverErr:
+		log.Printf("HTTP server error: %v", err)
+	case <-stop:
+		log.Println("Shutting down...")
+	}
 
-	<-stop
-	log.Println("Shutting down...")
+	// Give the HTTP server up to 5 seconds to finish in-flight requests.
+	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer shutdownCancel()
+	if err := srv.Shutdown(shutdownCtx); err != nil {
+		log.Printf("HTTP shutdown error: %v", err)
+	}
 }
 
 // daemonState is the shared, mutex-guarded state written from multiple
@@ -403,3 +431,48 @@ func (s *daemonState) snapshot() stateSnapshot {
 func (s *daemonState) setIdle(v bool)         { s.mu.Lock(); s.isIdle = v; s.mu.Unlock() }
 func (s *daemonState) setRemotePlay(v bool)   { s.mu.Lock(); s.isRemotePlay = v; s.mu.Unlock() }
 func (s *daemonState) setGame(pid int)        { s.mu.Lock(); s.isGameRunning = pid > 0; s.gamePID = pid; s.mu.Unlock() }
+
+// powerDecision is the outcome of the state machine priority table.
+// It tells the caller what actions to take, not how to take them — so the
+// decision logic can be table-tested without real PowerManager/Pauser.
+type powerDecision struct {
+	shouldIdle     bool
+	shouldPause    bool
+	shouldResume   bool
+	shouldPerf     bool
+	shouldDefault  bool
+}
+
+// decidePowerMode encodes the 4-branch priority table extracted from
+// updatePowerState (T4). It takes only immutable state and returns the
+// action set, making it pure and table-testable.
+//
+// Priority:
+// 1. Remote Play + Game running → never idle (force performance).
+// 2. Idle → powersave + pause game.
+// 3. Active + Game/Remote → performance + resume game.
+// 4. Active + Desktop → default active + resume game.
+func decidePowerMode(st stateSnapshot, isPaused bool) powerDecision {
+	shouldIdle := st.isIdle
+
+	// "remote play and a game is active then ignore idle"
+	if st.isRemotePlay && st.isGameRunning {
+		shouldIdle = false
+	}
+
+	d := powerDecision{shouldIdle: shouldIdle}
+
+	if shouldIdle {
+		d.shouldPause = st.isGameRunning && st.gamePID > 0 && !isPaused
+		// SetPowersave is always called when idle.
+	} else {
+		d.shouldResume = isPaused
+		if st.isGameRunning || st.isRemotePlay {
+			d.shouldPerf = true
+		} else {
+			d.shouldDefault = true
+		}
+	}
+
+	return d
+}

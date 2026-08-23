@@ -169,25 +169,48 @@ func (m *IdleMonitor) watchDevice(ctx context.Context, path string) {
 		log.Printf("[IdleMonitor] Failed to open %s: %v\n", path, err)
 		return
 	}
-	defer file.Close()
 
 	if m.Debug {
 		log.Printf("[IdleMonitor] Debug: Opened watching device: %s\n", path)
 	}
 
-	// We read 1 event at a time.
-	// struct input_event is typically 24 bytes on 64-bit.
-	// struct js_event is 8 bytes.
+	// R1: The blocking file.Read on a quiet device holds the fd forever.
+	// We run the read in a nested goroutine and select on ctx.Done().
+	// On ctx cancel we close the file to unblock the reader goroutine,
+	// which then exits cleanly — no fd leak, no goroutine leak.
+	type readResult struct {
+		n   int
+		err error
+	}
+	readCh := make(chan readResult, 1)
 	buf := make([]byte, 64)
 	var lastLog time.Time
+
+	// Reader goroutine: blocking reads, sends results to readCh.
+	readerDone := make(chan struct{})
+	go func() {
+		defer close(readerDone)
+		for {
+			n, err := file.Read(buf)
+			select {
+			case readCh <- readResult{n, err}:
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+
+	defer func() {
+		file.Close() // unblocks the reader goroutine's file.Read
+		<-readerDone
+	}()
 
 	for {
 		select {
 		case <-ctx.Done():
 			return
-		default:
-			// Blocking read
-			n, err := file.Read(buf)
+		case rr := <-readCh:
+			n, err := rr.n, rr.err
 			if err != nil {
 				// Device might have been disconnected
 				if m.Debug {

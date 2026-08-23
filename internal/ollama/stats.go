@@ -39,6 +39,29 @@ func (s *RequestStats) Add(info *RequestInfo, energyKWh, cost float64) {
 	s.LastRequest = info.Timestamp
 }
 
+// ModelDetails holds the model metadata returned by Ollama's /api/ps endpoint.
+type ModelDetails struct {
+	ParentModel       string   `json:"parent_model"`
+	Format            string   `json:"format"`
+	Family            string   `json:"family"`
+	Families          []string `json:"families"`
+	ParameterSize     string   `json:"parameter_size"`
+	QuantizationLevel string   `json:"quantization_level"`
+}
+
+// ModelInfo holds the full per-model data from Ollama's /api/ps response.
+// Matches the official API spec at https://docs.ollama.com/api/ps.
+type ModelInfo struct {
+	Name          string       `json:"name"`
+	Model         string       `json:"model"`
+	Size          int64        `json:"size"`
+	SizeVRAM      int64        `json:"size_vram"`
+	Digest        string       `json:"digest"`
+	Details       ModelDetails `json:"details"`
+	ExpiresAt     string       `json:"expires_at"`
+	ContextLength int          `json:"context_length"`
+}
+
 // Stats holds the complete statistics structure
 type Stats struct {
 	ByIP            map[string]RequestStats `json:"by_ip"`
@@ -47,8 +70,9 @@ type Stats struct {
 	Currency        string                  `json:"currency"`
 	PricePerKWh     float64                 `json:"price_per_kwh"`
 	Since           time.Time               `json:"since"`
-	Models          []string                `json:"models"`
+	Models          []ModelInfo             `json:"models"`
 	LoadedVRAMBytes int64                   `json:"loaded_vram_bytes"`
+	OllamaVersion   string                  `json:"ollama_version"`
 }
 
 // NewStats creates an initialized Stats
@@ -60,6 +84,6 @@ func NewStats(pricePerKWh float64, currency string) Stats {
 		Currency:    currency,
 		PricePerKWh: pricePerKWh,
 		Since:       time.Now(),
-		Models:      []string{},
+		Models:      []ModelInfo{},
 	}
 }

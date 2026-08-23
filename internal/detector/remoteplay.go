@@ -73,8 +73,15 @@ func (d *RemotePlayDetector) scanForVirtualDevices() ([]string, bool) {
 		log.Printf("[RemotePlay] Error reading /proc/bus/input/devices: %v\n", err)
 		return nil, false
 	}
+	return parseVirtualDevices(string(data))
+}
 
-	blocks := strings.Split(string(data), "\n\n")
+// parseVirtualDevices parses the content of /proc/bus/input/devices and
+// returns the /dev/input/jsN paths of virtual input devices (empty Phys, no
+// Uniq, joystick/gamepad). Extracted from scanForVirtualDevices so it is
+// testable without /proc (T7).
+func parseVirtualDevices(data string) ([]string, bool) {
+	blocks := strings.Split(data, "\n\n")
 	var foundPaths []string
 	found := false
 
@@ -121,7 +128,6 @@ func (d *RemotePlayDetector) scanForVirtualDevices() ([]string, bool) {
 				if strings.Contains(line, "js") {
 					isJoystick = true
 				}
-				// Extract handlers
 				parts := strings.Fields(strings.TrimPrefix(line, "H: Handlers="))
 				for _, part := range parts {
 					if strings.HasPrefix(part, "js") {
