@@ -87,7 +87,15 @@ def mock_coordinator():
             "total_ram_bytes": 48838284 * 1024,
             "daemon_version": "1.2.0",
         },
-        "gpu": {},
+        "gpu": {
+            "vram_used_bytes": 2984828928,
+            "vram_total_bytes": 17179869184,
+            "gtt_used_bytes": 1143558144,
+            "gtt_total_bytes": 25001775104,
+            "cpu_usage_percent": 0.6,
+            "temperature_celsius": 49,
+            "power_watts": 9.0,
+        },
     }
     return coord
 

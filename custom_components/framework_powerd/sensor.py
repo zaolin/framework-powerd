@@ -77,6 +77,7 @@ async def async_setup_entry(
             GPUVRAMTotalSensor(coordinator),
             GPUTTGUsedSensor(coordinator),
             GPUCPUUsageSensor(coordinator),
+            SystemVRAMUsedSensor(coordinator),
         ])
 
     # Add system info sensors (always present — static data from /status)
@@ -465,6 +466,23 @@ class GPUCPUUsageSensor(FrameworkEntity, SensorEntity):
     def native_value(self):
         gpu_data = self.coordinator.data.get("gpu", {})
         return round(gpu_data.get("cpu_usage_percent", 0), 1)
+
+
+class SystemVRAMUsedSensor(FrameworkEntity, SensorEntity):
+    """VRAM used by system/games (total GPU VRAM minus Ollama model VRAM)."""
+    _attr_name = "System VRAM Used"
+    _attr_unique_id = "system_vram_used"
+    _attr_device_class = SensorDeviceClass.DATA_SIZE
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_native_unit_of_measurement = UnitOfInformation.GIBIBYTES
+    _attr_icon = "mdi:memory"
+
+    @property
+    def native_value(self):
+        gpu_vram = self.coordinator.data.get("gpu", {}).get("vram_used_bytes", 0)
+        ollama_vram = self.coordinator.data.get("ollama", {}).get("loaded_vram_bytes", 0)
+        system_vram = max(gpu_vram - ollama_vram, 0)
+        return round(system_vram / (1024**3), 2)
 
 
 # Ollama Model Sensors

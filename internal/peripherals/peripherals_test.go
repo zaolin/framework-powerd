@@ -304,3 +304,95 @@ func TestDetectWiFi_USBAdapter(t *testing.T) {
 	_ = e.wifiPresent
 	_ = e.wifiIsUSB
 }
+
+// TestDetectFan_HardcodedMaxRPM verifies that detectFan sets the max RPM
+// to 6000 (hardcoded), not to the dynamic fan1_target value.
+func TestDetectFan_HardcodedMaxRPM(t *testing.T) {
+	e := &PeripheralEstimator{
+		fanIdleRPM:   2000,
+		fanIdleWatts: 0.5,
+		fanMaxWatts:  5.0,
+	}
+	e.detectFan()
+
+	// fanTargetRPM should be 6000 (hardcoded), not the dynamic fan1_target
+	if e.fanTargetRPM != 6000 {
+		t.Errorf("fanTargetRPM = %d, want 6000 (hardcoded)", e.fanTargetRPM)
+	}
+}
+
+// TestEstimateFanWatts_FanAtMidRPM verifies fan interpolation with the
+// corrected max RPM (6000, not the dynamic target).
+func TestEstimateFanWatts_FanAtMidRPM(t *testing.T) {
+	dir := t.TempDir()
+	fanPath := filepath.Join(dir, "fan1_input")
+	os.WriteFile(fanPath, []byte("4000"), 0644)
+
+	est := &PeripheralEstimator{
+		fanPath:      fanPath,
+		fanIdleRPM:   2000,
+		fanTargetRPM: 6000,
+		fanIdleWatts: 0.5,
+		fanMaxWatts:  5.0,
+	}
+
+	watts := est.estimateFanWatts()
+
+	// frac = (4000-2000)/(6000-2000) = 2000/4000 = 0.5
+	// watts = 0.5 + 0.5 * (5.0-0.5) = 0.5 + 2.25 = 2.75
+	expected := 2.75
+	if watts < expected*0.95 || watts > expected*1.05 {
+		t.Errorf("fan watts at 4000 RPM (max=6000) = %v, want ~%v", watts, expected)
+	}
+}
+
+// TestEstimateFanWatts_FanAtMaxRPM6000 verifies fan at 6000 RPM uses max watts.
+func TestEstimateFanWatts_FanAtMaxRPM6000(t *testing.T) {
+	dir := t.TempDir()
+	fanPath := filepath.Join(dir, "fan1_input")
+	os.WriteFile(fanPath, []byte("6000"), 0644)
+
+	est := &PeripheralEstimator{
+		fanPath:      fanPath,
+		fanIdleRPM:   2000,
+		fanTargetRPM: 6000,
+		fanIdleWatts: 0.5,
+		fanMaxWatts:  5.0,
+	}
+
+	watts := est.estimateFanWatts()
+	if watts != 5.0 {
+		t.Errorf("fan watts at 6000 RPM = %v, want 5.0", watts)
+	}
+}
+
+// TestEstimateWatts_WithFanAndPeripherals verifies the total estimate
+// includes fan interpolation with the corrected max RPM.
+func TestEstimateWatts_WithFanAndPeripherals(t *testing.T) {
+	dir := t.TempDir()
+	fanPath := filepath.Join(dir, "fan1_input")
+	os.WriteFile(fanPath, []byte("3000"), 0644)
+
+	est := &PeripheralEstimator{
+		usbMaxWatts:  1.0, // 200mA USB device
+		nvmeIdle:     0.05,
+		nvmeActive:   7.0,
+		fanPath:      fanPath,
+		fanIdleRPM:   2000,
+		fanTargetRPM: 6000,
+		fanIdleWatts: 0.5,
+		fanMaxWatts:  5.0,
+		wifiIdle:     0.8,
+		wifiActive:   3.0,
+	}
+
+	// Powersave: USB 30% = 0.3, NVMe idle = 0.05,
+	// Fan at 3000 RPM: frac=(3000-2000)/(6000-2000)=0.25 → 0.5+0.25*4.5=1.625
+	// WiFi idle = 0.8
+	// Total = 0.3 + 0.05 + 1.625 + 0.8 = 2.775
+	watts := est.EstimateWatts("powersave")
+	expected := 2.775
+	if watts < expected*0.95 || watts > expected*1.05 {
+		t.Errorf("powersave with fan at 3000 RPM = %v, want ~%v", watts, expected)
+	}
+}

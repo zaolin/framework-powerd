@@ -214,7 +214,9 @@ func (e *PeripheralEstimator) detectNVMe() {
 	}
 }
 
-// detectFan finds the first hwmon fan input and reads its target RPM.
+// detectFan finds the first hwmon fan input and reads the hwmon name.
+// Max RPM is hardcoded to 6000 (Framework Desktop fan max) because
+// fan1_target is the current target (changes dynamically), not the max.
 func (e *PeripheralEstimator) detectFan() {
 	matches, _ := filepath.Glob("/sys/class/hwmon/*/fan*_input")
 	for _, fanPath := range matches {
@@ -231,54 +233,35 @@ func (e *PeripheralEstimator) detectFan() {
 			e.fanHwmonName = strings.TrimSpace(string(nameData))
 		}
 
-		// Try to read the target RPM (max)
-		base := strings.TrimSuffix(fanPath, "_input")
-		targetData, err := os.ReadFile(base + "_target")
-		if err == nil {
-			target, _ := strconv.Atoi(strings.TrimSpace(string(targetData)))
-			if target > 0 {
-				e.fanTargetRPM = target
-			}
-		}
+		// Max RPM is hardcoded — fan1_target is the current target,
+		// not the maximum. Framework Desktop fan maxes at ~6000 RPM.
+		e.fanTargetRPM = 6000
 		break // use the first fan found
-	}
-
-	// If no target found, try reading max
-	if e.fanTargetRPM == 0 {
-		if e.fanPath != "" {
-			base := strings.TrimSuffix(e.fanPath, "_input")
-			maxData, err := os.ReadFile(base + "_max")
-			if err == nil {
-				maxRPM, _ := strconv.Atoi(strings.TrimSpace(string(maxData)))
-				if maxRPM > 0 {
-					e.fanTargetRPM = maxRPM
-				}
-			}
-		}
-		if e.fanTargetRPM == 0 {
-			e.fanTargetRPM = 5000 // fallback default
-		}
 	}
 }
 
-// detectWiFi checks for a wireless network interface via /sys/class/net/*/wireless.
-// This catches both PCI and USB WiFi adapters. If the WiFi adapter is USB,
-// its power is already included in the USB bMaxPower estimate — so we zero
-// out the separate WiFi estimate to avoid double-counting.
+// detectWiFi checks for a wireless network interface via /sys/class/ieee80211/.
+// This catches both PCI and USB WiFi adapters on all kernel versions.
+// If the WiFi adapter is USB, its power is already included in the USB
+// bMaxPower estimate — so we zero out the separate WiFi estimate to avoid
+// double-counting.
 func (e *PeripheralEstimator) detectWiFi() {
-	matches, _ := filepath.Glob("/sys/class/net/*")
-	for _, netPath := range matches {
-		wirelessPath := filepath.Join(netPath, "wireless")
-		if _, err := os.Stat(wirelessPath); err != nil {
-			continue // not a wireless interface
-		}
+	// Check for wireless phy via /sys/class/ieee80211/phy*
+	phyMatches, _ := filepath.Glob("/sys/class/ieee80211/phy*")
+	if len(phyMatches) == 0 {
+		// No WiFi detected → zero it out
+		e.wifiIdle = 0
+		e.wifiActive = 0
+		return
+	}
 
-		// WiFi found — check if it's a USB device
-		devicePath := filepath.Join(netPath, "device")
-		e.wifiPresent = true
-		e.wifiIface = filepath.Base(netPath)
-
-		// Resolve the device symlink to check if it's USB
+	// WiFi found — check if it's a USB device by resolving the
+	// phy's device symlink. If it resolves to /sys/bus/usb/, the
+	// power is already in the USB estimate.
+	e.wifiPresent = true
+	for _, phyPath := range phyMatches {
+		e.wifiIface = filepath.Base(phyPath)
+		devicePath := filepath.Join(phyPath, "device")
 		resolved, err := filepath.EvalSymlinks(devicePath)
 		if err == nil && strings.Contains(resolved, "/sys/bus/usb/") {
 			// USB WiFi adapter — power already counted in USB estimate
@@ -287,11 +270,8 @@ func (e *PeripheralEstimator) detectWiFi() {
 			e.wifiActive = 0
 		}
 		// If PCI WiFi, keep the defaults (0.8W idle / 3.0W active)
-		return
+		return // use the first phy found
 	}
-	// No WiFi detected → zero it out
-	e.wifiIdle = 0
-	e.wifiActive = 0
 }
 
 // detectEthernet checks for an ethernet controller with an active link.

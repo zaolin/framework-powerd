@@ -274,3 +274,46 @@ class TestPeripheralPowerSensor:
 
         sensor = PeripheralPowerSensor(mock_coordinator)
         assert sensor._attr_unique_id == "power_peripheral"
+
+
+class TestSystemVRAMUsedSensor:
+    """Test SystemVRAMUsedSensor — GPU VRAM minus Ollama VRAM."""
+
+    def test_native_value(self, mock_coordinator):
+        """System VRAM = GPU VRAM used - Ollama loaded VRAM."""
+        from custom_components.framework_powerd.sensor import SystemVRAMUsedSensor
+
+        # conftest: gpu vram_used_bytes = 2.78 GiB, ollama loaded_vram_bytes = 0
+        # system_vram = 2.78 - 0 = 2.78 GiB
+        sensor = SystemVRAMUsedSensor(mock_coordinator)
+        gpu_vram = mock_coordinator.data.get("gpu", {}).get("vram_used_bytes", 0)
+        ollama_vram = mock_coordinator.data.get("ollama", {}).get("loaded_vram_bytes", 0)
+        expected = round(max(gpu_vram - ollama_vram, 0) / (1024**3), 2)
+        assert sensor.native_value == expected
+
+    def test_native_value_with_ollama_loaded(self, mock_coordinator):
+        """When Ollama has models loaded, system VRAM should be the remainder."""
+        from custom_components.framework_powerd.sensor import SystemVRAMUsedSensor
+
+        # Set GPU VRAM to 37.57 GiB, Ollama to 31.91 GiB
+        mock_coordinator.data["gpu"]["vram_used_bytes"] = int(37.57 * (1024**3))
+        mock_coordinator.data["ollama"]["loaded_vram_bytes"] = int(31.91 * (1024**3))
+        sensor = SystemVRAMUsedSensor(mock_coordinator)
+        # system_vram = 37.57 - 31.91 = 5.66 GiB (approximately)
+        assert 5.5 < sensor.native_value < 5.8
+
+    def test_native_value_no_ollama(self, mock_coordinator):
+        """When no Ollama data, system VRAM should equal GPU VRAM."""
+        from custom_components.framework_powerd.sensor import SystemVRAMUsedSensor
+
+        mock_coordinator.data["ollama"] = {}
+        sensor = SystemVRAMUsedSensor(mock_coordinator)
+        gpu_vram = mock_coordinator.data.get("gpu", {}).get("vram_used_bytes", 0)
+        expected = round(gpu_vram / (1024**3), 2)
+        assert sensor.native_value == expected
+
+    def test_unique_id(self, mock_coordinator):
+        from custom_components.framework_powerd.sensor import SystemVRAMUsedSensor
+
+        sensor = SystemVRAMUsedSensor(mock_coordinator)
+        assert sensor._attr_unique_id == "system_vram_used"
