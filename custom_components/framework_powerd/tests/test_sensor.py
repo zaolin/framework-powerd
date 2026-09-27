@@ -317,3 +317,105 @@ class TestSystemVRAMUsedSensor:
 
         sensor = SystemVRAMUsedSensor(mock_coordinator)
         assert sensor._attr_unique_id == "system_vram_used"
+
+
+class TestPowerModeSensor:
+    """Test PowerModeSensor — passthrough of the daemon's reported mode.
+
+    With the balanced APU pinning the daemon always reports "balanced"
+    regardless of the internal performance/powersave tunable gate, so the
+    sensor must display that string verbatim without any value branching.
+    """
+
+    def test_native_value_balanced(self, mock_coordinator):
+        """native_value should return the daemon-reported mode verbatim."""
+        from custom_components.framework_powerd.sensor import PowerModeSensor
+
+        sensor = PowerModeSensor(mock_coordinator)
+        assert sensor.native_value == "balanced"
+
+    def test_native_value_passthrough_legacy_values(self, mock_coordinator):
+        """Older daemons may still report performance/powersave — display as-is."""
+        from custom_components.framework_powerd.sensor import PowerModeSensor
+
+        mock_coordinator.data["mode"] = "performance"
+        sensor = PowerModeSensor(mock_coordinator)
+        assert sensor.native_value == "performance"
+
+        mock_coordinator.data["mode"] = "powersave"
+        assert sensor.native_value == "powersave"
+
+    def test_native_value_missing_mode(self, mock_coordinator):
+        """Missing mode key should return None, not raise."""
+        from custom_components.framework_powerd.sensor import PowerModeSensor
+
+        del mock_coordinator.data["mode"]
+        sensor = PowerModeSensor(mock_coordinator)
+        assert sensor.native_value is None
+
+    def test_unique_id(self, mock_coordinator):
+        from custom_components.framework_powerd.sensor import PowerModeSensor
+
+        sensor = PowerModeSensor(mock_coordinator)
+        assert sensor._attr_unique_id == "power_mode"
+
+    def test_name(self, mock_coordinator):
+        from custom_components.framework_powerd.sensor import PowerModeSensor
+
+        sensor = PowerModeSensor(mock_coordinator)
+        assert sensor._attr_name == "Power Mode"
+
+
+class TestGamePIDSensor:
+    """Test GamePIDSensor."""
+
+    def test_native_value_with_pid(self, mock_coordinator):
+        from custom_components.framework_powerd.sensor import GamePIDSensor
+
+        mock_coordinator.data["game_pid"] = 4242
+        sensor = GamePIDSensor(mock_coordinator)
+        assert sensor.native_value == 4242
+
+    def test_native_value_no_game(self, mock_coordinator):
+        from custom_components.framework_powerd.sensor import GamePIDSensor
+
+        sensor = GamePIDSensor(mock_coordinator)
+        assert sensor.native_value == 0
+
+    def test_unique_id(self, mock_coordinator):
+        from custom_components.framework_powerd.sensor import GamePIDSensor
+
+        sensor = GamePIDSensor(mock_coordinator)
+        assert sensor._attr_unique_id == "game_pid"
+
+
+class TestUptimeSensor:
+    """Test UptimeSensor."""
+
+    def test_native_value(self, mock_coordinator):
+        from custom_components.framework_powerd.sensor import UptimeSensor
+
+        sensor = UptimeSensor(mock_coordinator)
+        assert sensor.native_value == 1234.0
+
+    def test_native_value_missing(self, mock_coordinator):
+        from custom_components.framework_powerd.sensor import UptimeSensor
+
+        mock_coordinator.data.pop("uptime_seconds")
+        sensor = UptimeSensor(mock_coordinator)
+        assert sensor.native_value is None
+
+    def test_unique_id(self, mock_coordinator):
+        from custom_components.framework_powerd.sensor import UptimeSensor
+
+        sensor = UptimeSensor(mock_coordinator)
+        assert sensor._attr_unique_id == "uptime"
+
+    def test_device_class_and_unit(self, mock_coordinator):
+        from custom_components.framework_powerd.sensor import UptimeSensor
+        from homeassistant.components.sensor import SensorDeviceClass
+        from homeassistant.const import UnitOfTime
+
+        sensor = UptimeSensor(mock_coordinator)
+        assert sensor._attr_device_class == SensorDeviceClass.DURATION
+        assert sensor._attr_native_unit_of_measurement == UnitOfTime.SECONDS

@@ -157,12 +157,54 @@ func getNetworkDeviceStatusFromDir(netDir string) []NetworkDeviceStatus {
 	return statuses
 }
 
+// setScalingGovernor writes the CPUfreq scaling governor on all online CPUs.
+// Best-effort: logs write errors but does not fail the caller.
+func setScalingGovernor(governor string) {
+	if _, err := os.Stat("/sys/devices/system/cpu/cpu0/cpufreq"); os.IsNotExist(err) {
+		return
+	}
+	matches, _ := filepath.Glob("/sys/devices/system/cpu/cpu*/cpufreq/scaling_governor")
+	for _, path := range matches {
+		if err := os.WriteFile(path, []byte(governor), 0644); err != nil {
+			log.Printf("  -> Failed to set scaling governor %s: %v\n", filepath.Base(path), err)
+		}
+	}
+}
+
+// applyBalancedProfile pins the APU profile trio (platform profile, EPP and
+// scaling governor) to the balanced defaults. The powerprofilesctl call is the
+// primary, authoritative step: on failure the mode switch is aborted. The sysfs
+// writes below are best-effort and re-assert the same values every time, so the
+// kernel never ends up fighting power-profiles-daemon over the EPP.
+func (pm *PowerManager) applyBalancedProfile() error {
+	if err := runCommand("powerprofilesctl", "set", "balanced"); err != nil {
+		return fmt.Errorf("set balanced power profile: %w", err)
+	}
+	setCPUPref("balance_performance")
+	setScalingGovernor("powersave")
+	return nil
+}
+
+// pinScheduler switches scx_lavd to gaming mode. The daemon pins it once
+// instead of flipping it with the power mode: the idle delta is negligible and
+// gaming mode ramps up fastest when an inference request lands while the
+// system is input-idle. Best-effort.
+func pinScheduler() {
+	if commandExists("scxctl") {
+		if err := runCommand("scxctl", "switch", "--sched", "scx_lavd", "--mode", "gaming"); err != nil {
+			log.Printf("Error setting scheduler: %v\n", err)
+		}
+	}
+}
+
 // SetDefaultActive sets the default active mode (Performance) when no specific game or remote play is detected but the system is not idle.
 func (pm *PowerManager) SetDefaultActive() error {
 	return pm.SetPerformance("Active Usage")
 }
 
-// SetPerformance enables performance mode.
+// SetPerformance applies the active-usage tunables. The APU profile trio is
+// pinned to balanced regardless of mode — only the secondary tunables
+// (scheduler aside) actually flip with idle/active transitions.
 func (pm *PowerManager) SetPerformance(reason string) error {
 	pm.mu.Lock()
 	if pm.currentMode == "performance" {
@@ -174,10 +216,10 @@ func (pm *PowerManager) SetPerformance(reason string) error {
 
 	log.Printf("[MODE SET] Switching to Performance Mode (%s)\n", reason)
 
-	// 1. Power Profile -> Performance (primary; its error is authoritative)
-	if err := runCommand("powerprofilesctl", "set", "performance"); err != nil {
+	// 1. Pin APU profile trio -> balanced (primary; its error is authoritative)
+	if err := pm.applyBalancedProfile(); err != nil {
 		log.Printf("Error setting power profile: %v\n", err)
-		return fmt.Errorf("set performance power profile: %w", err)
+		return err
 	}
 
 	// Primary command succeeded — commit the mode.
@@ -186,26 +228,21 @@ func (pm *PowerManager) SetPerformance(reason string) error {
 	pm.mu.Unlock()
 
 	// Best-effort tuning steps below; they log errors but do not fail the call.
-	// 2. CPU Preference -> Speed
-	setCPUPref("balance_performance")
+	// 2. Scheduler -> Gaming (pinned on every active transition; never downgraded on idle)
+	pinScheduler()
 
-	// 3. Scheduler -> Gaming
-	if commandExists("scxctl") {
-		if err := runCommand("scxctl", "switch", "--sched", "scx_lavd", "--mode", "gaming"); err != nil {
-			log.Printf("Error setting scheduler: %v\n", err)
-		}
-	}
-
-	// 4. PCIe ASPM -> Aggressive
+	// 3. PCIe ASPM -> Aggressive
 	setASPM("performance")
 
-	// 5. Disable Latency (Reverting USB & Audio Latency)
+	// 4. Disable Latency (Reverting USB & Audio Latency)
 	pm.disableLatency()
 
 	return nil
 }
 
-// SetPowersave enables power save mode
+// SetPowersave applies the idle tunables. The APU profile trio stays pinned to
+// balanced — idle power savings come from ASPM, powertop and network tuning,
+// while the balanced EPP/governor keep inference wake-up latency low.
 func (pm *PowerManager) SetPowersave(reason string) error {
 	pm.mu.Lock()
 	if pm.currentMode == "powersave" {
@@ -217,10 +254,10 @@ func (pm *PowerManager) SetPowersave(reason string) error {
 
 	log.Printf("[MODE SET] Switching to Power Saver (%s)\n", reason)
 
-	// 1. Power Profile -> Power Saver (primary; its error is authoritative)
-	if err := runCommand("powerprofilesctl", "set", "power-saver"); err != nil {
+	// 1. Pin APU profile trio -> balanced (primary; its error is authoritative)
+	if err := pm.applyBalancedProfile(); err != nil {
 		log.Printf("Error setting power profile: %v\n", err)
-		return fmt.Errorf("set powersave power profile: %w", err)
+		return err
 	}
 
 	// Primary command succeeded — commit the mode.
@@ -229,30 +266,35 @@ func (pm *PowerManager) SetPowersave(reason string) error {
 	pm.mu.Unlock()
 
 	// Best-effort tuning steps below.
-	// 2. CPU Preference -> Power Saving
-	setCPUPref("power")
-
-	// 3. Scheduler -> Powersave
-	if commandExists("scxctl") {
-		if err := runCommand("scxctl", "switch", "--sched", "scx_lavd", "--mode", "powersave"); err != nil {
-			log.Printf("Error setting scheduler: %v\n", err)
-		}
-	}
-
-	// 4. PCIe ASPM -> Aggressive
+	// 2. PCIe ASPM -> Max Savings
 	setASPM("powersupersave")
 
-	// 5. Powertop -> Max Savings
+	// 3. Powertop -> Max Savings
 	pm.enablePowertopTune()
 
-	// 6. Exclude Network Devices (Stability)
+	// 4. Exclude Network Devices (Stability)
 	pm.disableNetworkPowerSave()
 
 	return nil
 }
 
-// GetCurrentMode returns the currently active mode
+// GetCurrentMode returns the currently active mode. The APU profile trio is
+// pinned to balanced, so the externally reported mode is always "balanced";
+// the internal mode only gates the secondary tunables.
 func (pm *PowerManager) GetCurrentMode() string {
+	pm.mu.RLock()
+	defer pm.mu.RUnlock()
+	if pm.currentMode == "" {
+		return ""
+	}
+	return "balanced"
+}
+
+// CurrentTunableState returns the internal tunable gate ("performance" or
+// "powersave"). Consumers that need the active/idle distinction — such as the
+// peripheral power estimator — must use this instead of GetCurrentMode, which
+// always reports the pinned "balanced" profile.
+func (pm *PowerManager) CurrentTunableState() string {
 	pm.mu.RLock()
 	defer pm.mu.RUnlock()
 	return pm.currentMode

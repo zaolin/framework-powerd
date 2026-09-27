@@ -23,7 +23,7 @@ def mock_coordinator():
     coord.base_url = "http://localhost:8080"
     coord.headers = {}
     coord.data = {
-        "mode": "performance",
+        "mode": "balanced",
         "is_idle": False,
         "seconds_until_idle": 300,
         "is_game_running": False,

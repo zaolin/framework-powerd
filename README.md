@@ -3,7 +3,7 @@
 A Go daemon to automatically manage power profiles on the **Framework Desktop**, specifically tailored for hybrid setups acting as both a **Steam Gaming Console** and an **AI Server**.
 
 > [!IMPORTANT]
-> This daemon is designed for [**Framework Desktop**](https://frame.work/desktop) usage and has been explicitly tested on [**CachyOS**](https://cachyos.org). It ensures the system runs at peak performance when gaming (Active or Remote Play) and drastically reduces power consumption during idle AI server operation (24/7).
+> This daemon is designed for [**Framework Desktop**](https://frame.work/desktop) usage and has been explicitly tested on [**CachyOS**](https://cachyos.org). It keeps the APU in a **balanced** profile with low wake-up latency for the 24/7 AI server, applies performance tunables when gaming (Active or Remote Play), and drastically reduces power consumption during idle operation.
 >
 > **Tip for AI/Ollama Users**: When running local LLMs, using `ollama-vulkan` has been observed to save **~20W/h** compared to `ollama-rocm` on this hardware.
 
@@ -84,14 +84,27 @@ Network devices (Wi-Fi and Ethernet) are explicitly excluded from Runtime Power 
 
 ## Power State Flow
 
-The following flowchart illustrates how the daemon determines which power profile to apply. **Active Gaming** (either Local Input or Remote Play + Running Game) takes priority.
+The daemon pins the APU profile trio — `powerprofilesctl` **balanced**, CPU EPP **balance_performance**, scaling governor **powersave** — once at startup and re-asserts it on every transition. It never flips these per mode: the balanced profile keeps inference wake-up latency low while the 24/7 llama server is running, and the hardware scales dynamically. The scx scheduler (`scx_lavd`) is likewise pinned to **gaming** mode.
+
+What *does* switch with idle detection is the secondary tuning layer:
+
+| Tunable | Active Usage | Idle |
+|---|---|---|
+| PCIe ASPM | `performance` | `powersupersave` |
+| powertop auto-tune | off | on |
+| USB autosuspend / audio power-save | disabled | may re-enable* |
+| Game processes | running | recursively paused |
+
+\* USB/audio latency is disabled (reverted) on active transitions; during idle, `powertop --auto-tune` may re-enable autosuspend/power-save. Network devices are always excluded for stability.
+
+**Active Gaming** (either Local Input or Remote Play + Running Game) takes priority.
 
 ```mermaid
 flowchart TD
     Start([State Change Event]) --> CheckActive{Is Game Running?}
     
     CheckActive -- Yes --> CheckRemote{Is Remote Play?}
-    CheckRemote -- Yes --> ForcePerf["Force Performance (Ignore Idle)"]
+    CheckRemote -- Yes --> ForcePerf["Active Tunables (Ignore Idle)"]
     CheckRemote -- No --> CheckInput{Input Detected?}
     
     CheckActive -- No --> CheckInput
@@ -99,8 +112,8 @@ flowchart TD
     CheckInput -- Yes --> ForcePerf
     CheckInput -- No --> CheckIdle{Is System Idle?}
     
-    CheckIdle -- Yes --> Suspend["Pause Game Tree & Set Power Saver"]
-    CheckIdle -- No --> Resume["Resume Game Tree & Set Performance"]
+    CheckIdle -- Yes --> Suspend["Pause Game Tree & Apply Idle Tunables"]
+    CheckIdle -- No --> Resume["Resume Game Tree & Apply Active Tunables"]
     
     Resume --> ForcePerf
 ```
@@ -118,22 +131,22 @@ flowchart TD
 
 2.  **Decision Making**:
     *   **Priority 1: Active Usage**.
-        *   **Local Input**: Moving mouse/keyboard/controller -> **Performance**.
-        *   **Remote Play**: IF Remote Play is active **AND** a Game is running -> **Performance** (Ignores Idle).
+        *   **Local Input**: Moving mouse/keyboard/controller -> **Active Tunables** (ASPM performance, USB/audio latency off).
+        *   **Remote Play**: IF Remote Play is active **AND** a Game is running -> **Active Tunables** (Ignores Idle).
     *   **Priority 2: Idle (No Active Usage)**.
-        *   **Action**: Force **Power Saver**. If a game is running, **Recursively Pause It** (targeting `wineserver` or game process, avoiding Steam `reaper`).
+        *   **Action**: Apply **Idle Tunables** (ASPM powersupersave, powertop auto-tune). If a game is running, **Recursively Pause It** (targeting `wineserver` or game process, avoiding Steam `reaper`).
 3.  **Action**:
-    *   Manages Power Profiles and Process States (Running/Stopped).
+    *   Pins the APU profile trio to balanced, applies per-state tunables, and manages Process States (Running/Stopped).
 
 ## Prerequisites
 
 The daemon relies on the following tools:
 
-- `powerprofilesctl`: For changing system power profiles.
+- `powerprofilesctl`: For pinning the balanced system power profile.
 - `turbostat`: For accurate power monitoring (usually part of `linux-tools` or `linux-cpupower`).
 - `libsystemd-dev`: Required for building (Ollama journald integration uses cgo).
 - `powertop` (Optional): For auto-tuning power parameters.
-- `scxctl` (Optional): For sched-ext scheduler management.
+- `scxctl` (Optional): For sched-ext scheduler management (pinned to gaming mode).
 
 ### GPU Monitoring
 
@@ -211,7 +224,7 @@ This project is compatible with [HACS](https://hacs.xyz/) (Home Assistant Commun
     *   **JWT Secret**: If you started the daemon with a secret.
 
 **Sensors Provided**:
-*   **Power Mode**: `performance` / `powersave`
+*   **Power Mode**: `balanced` (the APU profile trio is pinned; the mode endpoint still accepts `performance`/`powersave` to switch the secondary tunables)
 *   **System Idle**: `True` / `False`
 *   **Game Status**: PID and Running/Paused state
 *   **Power Usage**: Package, Core, RAM (Watts)
@@ -237,19 +250,19 @@ This project is compatible with [HACS](https://hacs.xyz/) (Home Assistant Commun
 
 ### API Control
 
-Trigger modes manually using the REST API (default port 8080).
+Trigger modes manually using the REST API (default port 8080). Both `performance` and `powersave` re-assert the balanced APU profile; they switch only the secondary tunables (ASPM, powertop, USB/audio latency).
 
 If JWT authentication is enabled, you must export your token first:
 ```bash
 export TOKEN="your_jwt_token_here"
 ```
 
-- **Set Performance**:
+- **Apply Active Tunables** (performance):
   ```bash
   curl -H "Authorization: Bearer $TOKEN" -X POST -d '{"mode":"performance"}' http://localhost:8080/mode
   ```
 
-- **Set Powersave**:
+- **Apply Idle Tunables** (powersave):
   ```bash
   curl -H "Authorization: Bearer $TOKEN" -X POST -d '{"mode":"powersave"}' http://localhost:8080/mode
   ```

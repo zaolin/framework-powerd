@@ -40,8 +40,9 @@ type PowerMonitor struct {
 	// May be nil if not configured — in that case, only PkgWatt is used.
 	peripherals *peripherals.PeripheralEstimator
 
-	// modeProvider returns the current power mode ("performance" or "powersave")
-	// for peripheral estimation. May be nil.
+	// modeProvider returns the current tunable state ("performance" or
+	// "powersave") for peripheral estimation. May be nil. With the balanced
+	// APU pinning this is the internal tunable gate, not the reported mode.
 	modeProvider func() string
 
 	// History Tracking
@@ -66,7 +67,7 @@ func (m *PowerMonitor) SetPeripherals(est *peripherals.PeripheralEstimator) {
 	m.peripherals = est
 }
 
-// SetModeProvider sets a callback that returns the current power mode
+// SetModeProvider sets a callback that returns the current tunable state
 // ("performance" or "powersave") for peripheral estimation.
 func (m *PowerMonitor) SetModeProvider(fn func() string) {
 	m.mu.Lock()

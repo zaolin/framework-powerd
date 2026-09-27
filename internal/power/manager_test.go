@@ -3,6 +3,7 @@ package power
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -99,40 +100,137 @@ func TestGetCurrentMode(t *testing.T) {
 	if err := pm.SetPerformance("test"); err != nil {
 		t.Fatalf("SetPerformance error: %v", err)
 	}
-	if got := pm.GetCurrentMode(); got != "performance" {
-		t.Errorf("mode after SetPerformance = %q, want performance", got)
+	// The APU profile trio is pinned to balanced, so the externally reported
+	// mode is "balanced" regardless of the internal tunable gate.
+	if got := pm.GetCurrentMode(); got != "balanced" {
+		t.Errorf("mode after SetPerformance = %q, want balanced", got)
+	}
+}
+
+// TestCurrentTunableState verifies CurrentTunableState exposes the internal
+// performance/powersave gate while GetCurrentMode reports the pinned balanced
+// profile. Peripheral estimation depends on this distinction.
+func TestCurrentTunableState(t *testing.T) {
+	orig := CommandRunner()
+	t.Cleanup(func() { SetCommandRunner(orig) })
+	SetCommandRunner(&fakeRunner{available: map[string]bool{"powerprofilesctl": true}})
+
+	pm := NewPowerManager()
+	if got := pm.CurrentTunableState(); got != "" {
+		t.Errorf("initial tunable state = %q, want empty", got)
+	}
+	if err := pm.SetPerformance("test"); err != nil {
+		t.Fatalf("SetPerformance error: %v", err)
+	}
+	if got := pm.CurrentTunableState(); got != "performance" {
+		t.Errorf("tunable state after SetPerformance = %q, want performance", got)
+	}
+	if got := pm.GetCurrentMode(); got != "balanced" {
+		t.Errorf("reported mode = %q, want balanced", got)
+	}
+	if err := pm.SetPowersave("test"); err != nil {
+		t.Fatalf("SetPowersave error: %v", err)
+	}
+	if got := pm.CurrentTunableState(); got != "powersave" {
+		t.Errorf("tunable state after SetPowersave = %q, want powersave", got)
+	}
+	if got := pm.GetCurrentMode(); got != "balanced" {
+		t.Errorf("reported mode = %q, want balanced", got)
 	}
 }
 
 // TestSetPerformance_HappyPath verifies SetPerformance commits the mode after
-// the primary command succeeds.
+// the primary command succeeds and pins the balanced profile via
+// powerprofilesctl.
 func TestSetPerformance_HappyPath(t *testing.T) {
 	orig := CommandRunner()
 	t.Cleanup(func() { SetCommandRunner(orig) })
-	SetCommandRunner(&fakeRunner{available: map[string]bool{"powerprofilesctl": true, "scxctl": true}})
+	runner := &fakeRunner{available: map[string]bool{"powerprofilesctl": true, "scxctl": true}}
+	SetCommandRunner(runner)
 
 	pm := NewPowerManager()
 	if err := pm.SetPerformance("test"); err != nil {
 		t.Fatalf("SetPerformance error: %v", err)
 	}
-	if pm.GetCurrentMode() != "performance" {
-		t.Errorf("mode = %q, want performance", pm.GetCurrentMode())
+	if pm.GetCurrentMode() != "balanced" {
+		t.Errorf("mode = %q, want balanced", pm.GetCurrentMode())
+	}
+	if !contains(runner.calls, "powerprofilesctl set balanced") {
+		t.Errorf("expected powerprofilesctl set balanced, calls: %v", runner.calls)
 	}
 }
 
 // TestSetPowersave_HappyPath verifies SetPowersave commits the mode after
-// the primary command succeeds.
+// the primary command succeeds and pins the balanced profile via
+// powerprofilesctl.
 func TestSetPowersave_HappyPath(t *testing.T) {
 	orig := CommandRunner()
 	t.Cleanup(func() { SetCommandRunner(orig) })
-	SetCommandRunner(&fakeRunner{available: map[string]bool{"powerprofilesctl": true, "powertop": true, "iw": true}})
+	runner := &fakeRunner{available: map[string]bool{"powerprofilesctl": true, "powertop": true, "iw": true}}
+	SetCommandRunner(runner)
 
 	pm := NewPowerManager()
 	if err := pm.SetPowersave("test"); err != nil {
 		t.Fatalf("SetPowersave error: %v", err)
 	}
-	if pm.GetCurrentMode() != "powersave" {
-		t.Errorf("mode = %q, want powersave", pm.GetCurrentMode())
+	if pm.GetCurrentMode() != "balanced" {
+		t.Errorf("mode = %q, want balanced", pm.GetCurrentMode())
+	}
+	if !contains(runner.calls, "powerprofilesctl set balanced") {
+		t.Errorf("expected powerprofilesctl set balanced, calls: %v", runner.calls)
+	}
+}
+
+// TestSetPowersave_NoSchedulerSwitch verifies idle transitions no longer flip
+// the scx scheduler — gaming mode stays pinned from the last active transition.
+func TestSetPowersave_NoSchedulerSwitch(t *testing.T) {
+	orig := CommandRunner()
+	t.Cleanup(func() { SetCommandRunner(orig) })
+	runner := &fakeRunner{available: map[string]bool{"powerprofilesctl": true, "scxctl": true}}
+	SetCommandRunner(runner)
+
+	pm := NewPowerManager()
+	if err := pm.SetPowersave("test"); err != nil {
+		t.Fatalf("SetPowersave error: %v", err)
+	}
+	for _, call := range runner.calls {
+		if strings.HasPrefix(call, "scxctl") {
+			t.Errorf("SetPowersave must not touch scxctl, saw: %s", call)
+		}
+	}
+}
+
+// TestSetPerformance_PinsSchedulerGaming verifies SetPerformance pins scx_lavd
+// to gaming mode (once, on the active transition).
+func TestSetPerformance_PinsSchedulerGaming(t *testing.T) {
+	orig := CommandRunner()
+	t.Cleanup(func() { SetCommandRunner(orig) })
+	runner := &fakeRunner{available: map[string]bool{"powerprofilesctl": true, "scxctl": true}}
+	SetCommandRunner(runner)
+
+	pm := NewPowerManager()
+	if err := pm.SetPerformance("test"); err != nil {
+		t.Fatalf("SetPerformance error: %v", err)
+	}
+	if !contains(runner.calls, "scxctl switch --sched scx_lavd --mode gaming") {
+		t.Errorf("expected scxctl gaming pin, calls: %v", runner.calls)
+	}
+}
+
+// TestSetDefaultActive_PinsScheduler verifies SetDefaultActive (startup path)
+// pins the scheduler to gaming mode.
+func TestSetDefaultActive_PinsScheduler(t *testing.T) {
+	orig := CommandRunner()
+	t.Cleanup(func() { SetCommandRunner(orig) })
+	runner := &fakeRunner{available: map[string]bool{"powerprofilesctl": true, "scxctl": true}}
+	SetCommandRunner(runner)
+
+	pm := NewPowerManager()
+	if err := pm.SetDefaultActive(); err != nil {
+		t.Fatalf("SetDefaultActive error: %v", err)
+	}
+	if !contains(runner.calls, "scxctl switch --sched scx_lavd --mode gaming") {
+		t.Errorf("expected scxctl gaming pin on startup, calls: %v", runner.calls)
 	}
 }
 
@@ -181,9 +279,11 @@ func TestTriggerActivity_NoIdleMonitor(t *testing.T) {
 type fakeRunner struct {
 	available map[string]bool
 	runErr    error
+	calls     []string // recorded "name args..." invocations
 }
 
 func (f *fakeRunner) Run(name string, args ...string) error {
+	f.calls = append(f.calls, name+" "+strings.Join(args, " "))
 	if f.runErr != nil {
 		return f.runErr
 	}
@@ -209,6 +309,16 @@ func (c *countingRunner) Run(name string, args ...string) error {
 	return nil
 }
 func (c *countingRunner) LookPath(name string) bool { return c.available[name] }
+
+// contains reports whether any recorded call equals want.
+func contains(calls []string, want string) bool {
+	for _, c := range calls {
+		if c == want {
+			return true
+		}
+	}
+	return false
+}
 
 // TestGetNetworkDeviceStatusFromDir verifies T2: the function reads interface
 // power-control status from a temp-dir mock of /sys/class/net.

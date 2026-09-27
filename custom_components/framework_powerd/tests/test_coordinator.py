@@ -29,12 +29,18 @@ class TestFrameworkPowerCoordinator:
 
     def test_headers_with_token(self, mock_coordinator):
         """Test headers include Authorization when token set."""
+        from unittest.mock import patch
+
         from custom_components.framework_powerd import FrameworkPowerCoordinator
-        
-        coordinator = FrameworkPowerCoordinator(
-            MagicMock(), "localhost", 8080, "test-token", "notify.mobile_phone"
-        )
-        
+
+        # DataUpdateCoordinator.__init__ without an explicit config_entry
+        # reports usage via homeassistant.helpers.frame, which requires a
+        # live hass. Unit tests don't set up the frame helper, so stub it.
+        with patch("homeassistant.helpers.frame.report_usage"):
+            coordinator = FrameworkPowerCoordinator(
+                MagicMock(), "localhost", 8080, "test-token", "notify.mobile_phone"
+            )
+
         assert "Authorization" in coordinator.headers
         assert coordinator.headers["Authorization"] == "Bearer test-token"
 

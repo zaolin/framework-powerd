@@ -110,8 +110,8 @@ func TestHandleMode_Performance(t *testing.T) {
 	var resp map[string]string
 	json.Unmarshal(w.Body.Bytes(), &resp)
 
-	if resp["mode"] != "performance" {
-		t.Errorf("Expected mode 'performance', got '%s'", resp["mode"])
+	if resp["mode"] != "balanced" {
+		t.Errorf("Expected mode 'balanced', got '%s'", resp["mode"])
 	}
 }
 
@@ -139,8 +139,8 @@ func TestHandleMode_Powersave(t *testing.T) {
 	var resp map[string]string
 	json.Unmarshal(w.Body.Bytes(), &resp)
 
-	if resp["mode"] != "powersave" {
-		t.Errorf("Expected mode 'powersave', got '%s'", resp["mode"])
+	if resp["mode"] != "balanced" {
+		t.Errorf("Expected mode 'balanced', got '%s'", resp["mode"])
 	}
 }
 
@@ -177,9 +177,10 @@ func TestHandleMode_PowerProfilectlFails(t *testing.T) {
 		t.Errorf("expected generic error 'Failed to set mode', got %q", resp["error"])
 	}
 
-	// currentMode must NOT have been committed on failure.
-	if got := pm.GetCurrentMode(); got == "performance" {
-		t.Errorf("mode must not advance to 'performance' when the primary command failed, got %q", got)
+	// currentMode must NOT have been committed on failure. With the balanced
+	// pinning, an uncommitted mode reports "" (not "balanced").
+	if got := pm.GetCurrentMode(); got == "balanced" {
+		t.Errorf("mode must not advance to 'balanced' when the primary command failed, got %q", got)
 	}
 }
 

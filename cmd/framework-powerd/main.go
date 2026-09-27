@@ -280,7 +280,9 @@ func runServer() {
 	})
 	periphEst.LogDetection()
 	powerMon.SetPeripherals(periphEst)
-	powerMon.SetModeProvider(pm.GetCurrentMode)
+	// Peripheral estimation needs the active/idle tunable state, not the
+	// reported "balanced" profile — see CurrentTunableState.
+	powerMon.SetModeProvider(pm.CurrentTunableState)
 
 	pwrCtx, pwrCancel := context.WithCancel(context.Background())
 	defer pwrCancel()
