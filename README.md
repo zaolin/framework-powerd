@@ -189,7 +189,38 @@ Or for NVMe:
 
 ## Installation
 
-### Build from Source
+### Makefile (recommended)
+
+```bash
+git clone https://github.com/zaolin/framework-powerd.git
+cd framework-powerd
+make install    # build, binary, config, JWT secret and systemd unit
+make enable     # systemctl enable --now framework-powerd
+make token      # print a JWT token for Home Assistant
+```
+
+`make install`:
+
+- builds with the version injected from `git describe`,
+- installs the binary to `/usr/local/bin/framework-powerd`,
+- installs `configs/config.example.json` to `/etc/framework-powerd/config.json` **only if no config exists**,
+- creates `/etc/framework-powerd/env` with a random `JWT_SECRET` (mode `600`) when neither that file nor `server.jwt_secret` exists,
+- installs the unit to `/etc/systemd/system/framework-powerd.service` and runs `systemctl daemon-reload`.
+
+Additional targets:
+
+| Target | Action |
+|---|---|
+| `make enable` | Enable and start the service, then show its status. |
+| `make disable` | Stop and disable the service. |
+| `make uninstall` | Remove unit and binary; keep config and JWT secret. |
+| `make token` | Print a token signed with the installed JWT secret. |
+
+The targets use `sudo` internally. Run `make install SUDO=` as root, or override
+paths with `PREFIX`, `BINDIR`, `CONFIG_DIR` and `SYSTEMD_DIR`. If you change
+`CONFIG_DIR`, update `EnvironmentFile` in the unit accordingly.
+
+### Manual installation
 
 1.  **Clone the repository**:
     ```bash
@@ -216,7 +247,9 @@ Or for NVMe:
 
 The unit uses `Type=notify` with a 30-second watchdog: the daemon sends `READY=1`
 after binding the API and pings the watchdog while running. `StateDirectory`
-creates `/var/lib/framework-powerd` for the persisted metrics.
+creates `/var/lib/framework-powerd` for the persisted metrics. The optional
+`EnvironmentFile=-/etc/framework-powerd/env` supplies `JWT_SECRET` on systems
+installed via `make install`.
 
 ## Usage
 

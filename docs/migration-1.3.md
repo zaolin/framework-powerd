@@ -49,6 +49,7 @@ The shipped unit changed:
 - `Type=notify` and `WatchdogSec=30s`
 - `RestartSec=5s` and a start limit
 - `StateDirectory=framework-powerd`
+- `EnvironmentFile=-/etc/framework-powerd/env` (created by `make install`)
 - additional hardening (`NoNewPrivileges`, `PrivateTmp`, `ProtectHome`,
   `ProtectSystem=full`, `ProtectKernelModules`, `ProtectKernelLogs`, etc.)
 

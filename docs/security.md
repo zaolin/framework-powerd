@@ -25,6 +25,11 @@ Prefer `server.jwt_secret` in the config file or the `JWT_SECRET` environment
 variable over `--jwt-secret`: command-line arguments are visible in the process
 list.
 
+`make install` writes a random secret to `/etc/framework-powerd/env` (mode
+`600`) when no secret exists. The shipped unit loads it via
+`EnvironmentFile=-/etc/framework-powerd/env`. Generate a Home Assistant token
+with `make token`.
+
 ## Network exposure
 
 - Default bind address is `localhost`.

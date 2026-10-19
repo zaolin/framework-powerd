@@ -20,6 +20,8 @@ semantic versioning.
 - English config-flow translations (`strings.json`, `translations/en.json`).
 - Shared Home Assistant entity base with `sw_version` from the daemon.
 - CI workflows for Go, Python, HACS and hassfest validation.
+- Makefile targets for binary, config, JWT secret, systemd unit, enable,
+  disable, uninstall and token generation.
 - Documentation for configuration, API, Home Assistant entities, architecture,
   troubleshooting, security and migration.
 

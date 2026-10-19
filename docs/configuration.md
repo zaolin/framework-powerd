@@ -126,4 +126,6 @@ A ready-to-copy file lives at [`configs/config.example.json`](../configs/config.
 
 Prefer `server.jwt_secret` or the `JWT_SECRET` environment variable over a
 command-line secret: command-line arguments are visible in the process list.
+`make install` creates `/etc/framework-powerd/env` (mode `600`) with a random
+`JWT_SECRET`; the shipped unit loads it via `EnvironmentFile`.
 See [Security](security.md).
