@@ -38,41 +38,60 @@ For every watched device, a lightweight Goroutine is spawned:
 A separate Goroutine runs a ticker every **1 second**:
 
 1.  **Calculate Duration**: `timeSinceLastActivity = Now - lastActivity`.
-2.  **Check Timeout**: Compare against the configured timeout (default: 5 minutes, configurable via `--idle-timeout`).
+2.  **Check Timeout**: Compare against the configured timeout (`server.idle_timeout` or `--idle-timeout`, default: 5 minutes).
 3.  **Transitions**:
-    *   **Active -> Idle**: If duration > timeout. Triggers `onIdle()` (Pauses games recursively, sets Power Saver).
-    *   **Idle -> Active**: If duration < timeout. Triggers `onActive()` (Resumes games, sets Performance).
+    *   **Active -> Idle**: If duration ≥ timeout, sets the idle flag and calls `onIdle()`. The reconciler applies the idle secondary tunables and pauses the game tree. The APU profile trio remains **balanced**.
+    *   **Idle -> Active**: If duration < timeout, clears the idle flag and calls `onActive()`. The reconciler resumes a paused game and then chooses **performance** (game or Remote Play) or **default active** (desktop).
 
 ## Flow of Control
 
+### Input path
+
 ```mermaid
-graph TD
+flowchart TD
     subgraph Inputs
         Events["/dev/input/event*"]
         Joysticks["/dev/input/js*"]
     end
 
     subgraph "Device Filter"
-        Check{Is Joystick?}
+        Check{"Is Joystick?"}
         Events --> Check
-        Check -- Yes --> Ignore[Ignore Event Node]
-        Check -- No --> WatchEvent[Watch Event Node]
-        Joysticks --> WatchJS[Watch Joystick Node]
+        Check -- "yes" --> Ignore["Ignore event node"]
+        Check -- "no" --> WatchEvent["Watch event node"]
+        Joysticks --> WatchJS["Watch joystick node"]
     end
 
     subgraph "Input Logic"
         WatchEvent --> ValidInput
-        WatchJS --> Parse[Parse js_event]
-        Parse --> CheckInit{Is Init?}
-        CheckInit -- Yes --> Drop
-        CheckInit -- No --> CheckDead{In Deadzone?}
-        CheckDead -- Yes --> Drop
-        CheckDead -- No --> ValidInput
+        WatchJS --> Parse["Parse js_event"]
+        Parse --> CheckInit{"Is init event?"}
+        CheckInit -- "yes" --> Drop["Drop"]
+        CheckInit -- "no" --> CheckDead{"In deadzone?"}
+        CheckDead -- "yes" --> Drop
+        CheckDead -- "no" --> ValidInput
     end
 
-    ValidInput[Valid Activity] --> UpdateTime["Atomic Store Now()"]
-    
-    UpdateTime --> GlobalState[("Atomic Timestamp")]
+    ValidInput["Valid activity"] --> UpdateTime["Atomic store Now()"]
+    UpdateTime --> GlobalState[("Atomic timestamp")]
+```
+
+### Idle state machine
+
+```mermaid
+flowchart TD
+    Ticker["1s ticker"] --> Elapsed{"elapsed >= timeout?"}
+    Timestamp[("Atomic timestamp")] --> Elapsed
+
+    Elapsed -- "yes" --> WasIdle{"Already idle?"}
+    WasIdle -- "no" --> SetIdle["Set isIdle = true"]
+    SetIdle --> OnIdle["onIdle(): reconcile idle tunables + pause game"]
+    WasIdle -- "yes" --> Wait["No transition"]
+
+    Elapsed -- "no" --> WasActive{"Currently idle?"}
+    WasActive -- "yes" --> SetActive["Set isIdle = false"]
+    SetActive --> OnActive["onActive(): resume game + reconcile"]
+    WasActive -- "no" --> Wait
 ```
 
 ## Troubleshooting

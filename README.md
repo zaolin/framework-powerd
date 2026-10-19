@@ -1,4 +1,6 @@
-![Framework Power Daemon Logo](docs/logo.png)
+<p align="center">
+  <img src="docs/logo.png" alt="Framework Power Daemon" width="256">
+</p>
 
 A Go daemon to automatically manage power profiles on the **Framework Desktop**, specifically tailored for hybrid setups acting as both a **Steam Gaming Console** and an **AI Server**.
 
@@ -38,44 +40,46 @@ A Go daemon to automatically manage power profiles on the **Framework Desktop**,
 
 ## Architecture & Flow
 
-The daemon operates by listening to multiple sources of input: Kernel Udev events (HDMI), Input Devices (Activity), Steam Processes, and Virtual Devices (Remote Play).
+The daemon combines raw input, Steam and Remote Play detection with power, GPU, SMART and NVMe telemetry. Only input, Steam, Remote Play and the API drive the power state machine; telemetry feeds `/status`, `/healthz` and Home Assistant.
 
 ```mermaid
-graph TD
-    subgraph Sources [Input Sources]
-        Input[Raw Input Monitor]
-        Steam[Steam Process Check]
-        Remote[Virtual Joystick Check]
-        Turbo[Turbostat Power Monitor]
-        GPU[GPU Sysfs Monitor]
-        SMART[SMARTd Journal Monitor]
-        API[User API]
+flowchart TD
+    subgraph Control["Control path"]
+        Input["Raw input + hotplug"]
+        Steam["Steam detector"]
+        Remote["Remote Play detector"]
+        API["HTTP API"]
     end
 
-    subgraph Logic [State Machine]
-        Main{Power Daemon}
+    Reconciler{"Power reconciler"}
+
+    Input -->|"activity"| Reconciler
+    Steam -->|"game PID"| Reconciler
+    Remote -->|"virtual devices"| Reconciler
+    API -->|"/mode, /activity"| Reconciler
+
+    Reconciler -->|"powerprofilesctl"| PPD["power-profiles-daemon"]
+    Reconciler -->|"ASPM / powertop / USB / audio"| Sysfs["/sys"]
+    Reconciler -->|"SIGSTOP / SIGCONT"| Pauser["Game process tree"]
+
+    subgraph Telemetry["Telemetry and status"]
+        Turbo["turbostat"]
+        GPU["GPU sysfs"]
+        SMART["smartd journal"]
+        NVMe["NVMe SMART poller"]
+        Mem["/proc/meminfo"]
     end
 
-    subgraph Actions [Power Management]
-        PCTL[powerprofilesctl]
-        Pauser[Recursive Process Pauser]
-    end
-    
-    Input -->|Activity| Main
-    Steam -->|Game PID| Main
-    Remote -->|Virtual Device| Main
-    Turbo -->|Power/Energy Stats| Main
-    GPU -->|GPU Metrics| Main
-    SMART -->|Health Alerts| Main
-    API -->|Override/Activity| Main
-
-    Main -->|Set Profile| PCTL
-    Main -->|SIGSTOP/SIGCONT| Pauser
-    Input -.->|fsnotify| Hotplug[Device Hotplug]
-    Hotplug --> Input
-    Turbo -.->|persist| State[Metrics State File]
-    GPU -.->|sysfs| Sysfs[/sys/class/drm]
-    SMART -.->|journald| Journal[systemd Journal]
+    Turbo --> PowerMon["Power monitor"]
+    PowerMon --> Metrics[("metrics.json")]
+    PowerMon --> Status["/status + /healthz"]
+    GPU --> Status
+    SMART --> Alerts[("alerts.json")]
+    NVMe --> Status
+    NVMe --> Alerts
+    Mem --> Status
+    API --> Status
+    Status --> HA["Home Assistant"]
 ```
 
 ## Power Monitoring
@@ -123,25 +127,18 @@ What *does* switch with idle detection is the secondary tuning layer:
 
 \* USB/audio latency is disabled (reverted) on active transitions; during idle, `powertop --auto-tune` may re-enable autosuspend/power-save. Network devices are always excluded for stability.
 
-**Active Gaming** (either Local Input or Remote Play + Running Game) takes priority.
+**Remote Play + a running game** takes priority over idle. Otherwise idle wins; when active, a running game or Remote Play selects performance tunables, and an active desktop uses the default-active tunables.
 
 ```mermaid
 flowchart TD
-    Start([State Change Event]) --> CheckActive{Is Game Running?}
-    
-    CheckActive -- Yes --> CheckRemote{Is Remote Play?}
-    CheckRemote -- Yes --> ForcePerf["Active Tunables (Ignore Idle)"]
-    CheckRemote -- No --> CheckInput{Input Detected?}
-    
-    CheckActive -- No --> CheckInput
-    
-    CheckInput -- Yes --> ForcePerf
-    CheckInput -- No --> CheckIdle{Is System Idle?}
-    
-    CheckIdle -- Yes --> Suspend["Pause Game Tree & Apply Idle Tunables"]
-    CheckIdle -- No --> Resume["Resume Game Tree & Apply Active Tunables"]
-    
-    Resume --> ForcePerf
+    Start(["State change"]) --> RP{"Remote Play + game running?"}
+    RP -- "yes" --> Perf["Apply performance tunables"]
+    RP -- "no" --> Idle{"System idle?"}
+    Idle -- "yes" --> Save["Apply idle tunables + pause game tree"]
+    Idle -- "no" --> Resume["Resume paused game tree (if any)"]
+    Resume --> Game{"Game running or Remote Play?"}
+    Game -- "yes" --> Perf
+    Game -- "no" --> Default["Apply default active tunables"]
 ```
 
 ## How it works
@@ -150,17 +147,20 @@ flowchart TD
     *   **Remote Play**: Polls `/proc/bus/input/devices` to detect virtual joysticks.
     *   **Input**: Monitors `/dev/input/js*` (with deadzone) and valid `/dev/input/event*` devices. Ignores noise and init bursts.
     *   **Steam**: Periodically checks for running Steam games and identifies the "Reaper" root process.
+    *   **Power**: Reads `turbostat` samples and aggregates 24h/7d/lifetime energy.
+    *   **GPU**: Reads VRAM, GTT, temperature, power and CPU usage from sysfs.
+    *   **SMART/NVMe**: Follows smartd journal alerts and polls NVMe health directly.
+    *   **Memory**: Reads `/proc/meminfo` for used/free/available RAM.
 
 > [!NOTE]
-> For a detailed explanation of the idle detection mechanism, including diagrams, see [Idle Detection Logic](docs/idle_logic.md).
+> For the detailed component and data flow, see [Architecture](docs/architecture.md). For the idle detection mechanism, see [Idle Detection Logic](docs/idle_logic.md).
 
 
 2.  **Decision Making**:
-    *   **Priority 1: Active Usage**.
-        *   **Local Input**: Moving mouse/keyboard/controller -> **Active Tunables** (ASPM performance, USB/audio latency off).
-        *   **Remote Play**: IF Remote Play is active **AND** a Game is running -> **Active Tunables** (Ignores Idle).
-    *   **Priority 2: Idle (No Active Usage)**.
-        *   **Action**: Apply **Idle Tunables** (ASPM powersupersave, powertop auto-tune). If a game is running, **Recursively Pause It** (targeting `wineserver` or game process, avoiding Steam `reaper`).
+    *   **Priority 1: Remote Play + Game** -> **Performance Tunables**, idle is ignored.
+    *   **Priority 2: Idle (No Active Usage)** -> **Idle Tunables** (ASPM powersupersave, powertop auto-tune); pause the game tree.
+    *   **Priority 3: Active Game/Remote Play** -> **Performance Tunables**; resume a paused game.
+    *   **Priority 4: Active Desktop** -> **Default Active Tunables**; resume a paused game.
 3.  **Action**:
     *   Pins the APU profile trio to balanced, applies per-state tunables, and manages Process States (Running/Stopped).
 

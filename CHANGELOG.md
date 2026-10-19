@@ -23,6 +23,15 @@ semantic versioning.
 - Home Assistant Power Mode maps legacy `performance`/`powersave` values to
   `balanced`.
 
+### Fixed
+
+- Corrected the README and architecture Mermaid diagrams; they now render and
+  reflect the NVMe, health and Home Assistant paths.
+- Corrected the idle-logic documentation and added a ticker/state-machine
+  diagram.
+- Converted the icon/logo assets to real PNG files and added HA 2026.3+
+  `brand/` images (icon at 256/512, logo at 512/1024).
+
 ## [1.4.0] - 2026-10-19
 
 ### Added

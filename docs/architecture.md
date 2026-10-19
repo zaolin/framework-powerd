@@ -2,7 +2,8 @@
 
 `framework-powerd` is a single Go binary with a small Home Assistant companion
 integration. The daemon owns the power state machine; the integration is a
-read-mostly API client.
+read-mostly API client with a small control surface (mode select, idle reset,
+services).
 
 ## Components
 
@@ -12,7 +13,8 @@ read-mostly API client.
 | `internal/detector` | Steam game detection and Steam Remote Play virtual devices. |
 | `internal/power` | Power profile pinning, tunables, process pauser, turbostat, energy aggregation, metrics persistence. |
 | `internal/gpu` | AMD GPU sysfs metrics (VRAM/GTT/temperature/power) and CPU usage. |
-| `internal/smartd` | smartd journald alerts. |
+| `internal/nvme` | Direct NVMe SMART polling (`nvme smart-log` / `smartctl`) and threshold evaluation. |
+| `internal/smartd` | smartd journald alerts, sticky alert state and persistence. |
 | `internal/peripherals` | USB/NVMe/fan/Wi-Fi/Ethernet power estimation. |
 | `internal/api` | HTTP control plane, JWT, rate limiting, `/healthz`. |
 | `internal/config` | JSON configuration and validation. |
@@ -23,35 +25,56 @@ read-mostly API client.
 ## Runtime flow
 
 ```mermaid
-graph TD
-    subgraph Sources [Sources]
-        Input[Raw input + hotplug]
-        Steam[Steam process check]
-        Remote[Remote Play virtual devices]
-        Turbo[turbostat]
-        GPU[GPU sysfs]
-        SMART[smartd journal]
-        API[HTTP API]
+flowchart TD
+    subgraph Control["Control path"]
+        Input["Raw input + hotplug"]
+        Steam["Steam detector"]
+        Remote["Remote Play detector"]
+        API["HTTP API"]
     end
 
-    Main{Reconciler}
+    Reconciler{"Reconciler"}
 
-    Input --> Main
-    Steam --> Main
-    Remote --> Main
-    API --> Main
-    Turbo -->|power + energy| Main
-    GPU -->|VRAM/GTT/CPU| Status[/status and /healthz/]
-    SMART -->|alerts| Status
-    Main -->|powerprofilesctl| PPD[power-profiles-daemon]
-    Main -->|ASPM/powertop/USB/audio| Sysfs[/sys]
-    Main -->|SIGSTOP/SIGCONT| Pauser[Game process tree]
-    Main -->|snapshot| Persist[(metrics.json)]
+    Input -->|"activity"| Reconciler
+    Steam -->|"game PID"| Reconciler
+    Remote -->|"virtual devices"| Reconciler
+    API -->|"/mode, /activity"| Reconciler
+
+    Reconciler -->|"powerprofilesctl"| PPD["power-profiles-daemon"]
+    Reconciler -->|"ASPM / powertop / USB / audio"| Sysfs["/sys"]
+    Reconciler -->|"SIGSTOP / SIGCONT"| Pauser["Game process tree"]
+
+    subgraph Telemetry["Telemetry and status"]
+        Turbo["turbostat supervisor"]
+        GPU["GPU monitor"]
+        SMART["smartd monitor"]
+        NVMe["NVMe monitor"]
+        Mem["memory collector"]
+    end
+
+    Turbo --> PowerMon["Power monitor"]
+    PowerMon --> Metrics[("metrics.json")]
+    PowerMon --> Status["/status + /healthz"]
+    GPU --> Status
+    SMART --> Alerts[("alerts.json")]
+    SMART --> Status
+    NVMe --> Status
+    NVMe --> Alerts
+    Mem --> Status
+    API --> Status
+    Status --> HA["Home Assistant integration"]
+    HA -->|"select / button / services"| API
 ```
 
 The `Reconciler` is `updatePowerState` in `cmd/framework-powerd/main.go`. All
 callbacks take a mutex, so idle, remote-play, Steam and API events cannot
 interleave mode changes or pause/resume operations.
+
+The API exposes `/status` (including a `health` block and `tunable_mode`),
+`/healthz`, `/mode`, `/activity`, `/smartd/stats` and `/nvme/stats`. The Home
+Assistant integration polls `/status`, creates notifications from SMART/NVMe
+warnings, and can call `/mode` and `/activity` through its select entity,
+button and services.
 
 ## State machine
 
@@ -117,16 +140,18 @@ Startup order:
 1. Load and validate config, apply explicit CLI overrides.
 2. Pin the balanced profile and validate external tools.
 3. Start idle, Remote Play, Steam and power monitors.
-4. Restore persisted metrics, then start turbostat and the persistence loop.
-5. Start optional SMART/GPU monitors.
+4. Restore persisted metrics and alerts, then start turbostat and the
+   persistence loops.
+5. Start optional SMART, NVMe and GPU monitors.
 6. Bind the HTTP listener, send systemd `READY=1`, start watchdog pings.
 
 Shutdown order:
 
 1. Receive `SIGTERM`/`SIGINT`, send systemd `STOPPING=1`.
 2. Stop the power monitor and flush the final metrics snapshot.
-3. Close the HTTP server with a 5-second grace period.
-4. Resume any paused game process tree before exiting.
+3. Stop the SMART monitor and flush persisted alerts.
+4. Close the HTTP server with a 5-second grace period.
+5. Resume any paused game process tree before exiting.
 
 ## Security boundary
 
