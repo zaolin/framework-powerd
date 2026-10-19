@@ -577,7 +577,7 @@ func TestAuthMiddleware_NonBearerScheme(t *testing.T) {
 func TestHandleHealth(t *testing.T) {
 	pm := power.NewPowerManager()
 	powerMon := power.NewPowerMonitor()
-	server := NewServer(pm, powerMon, "secret", nil, nil, nil, sysinfo.SystemInfo{DaemonVersion: "1.4.0"})
+	server := NewServer(pm, powerMon, "secret", nil, nil, nil, sysinfo.SystemInfo{DaemonVersion: "1.5.0"})
 
 	req := httptest.NewRequest(http.MethodGet, "/healthz", nil)
 	w := httptest.NewRecorder()
@@ -594,8 +594,8 @@ func TestHandleHealth(t *testing.T) {
 	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("invalid json: %v", err)
 	}
-	if resp.Version != "1.4.0" {
-		t.Errorf("version = %q, want 1.4.0", resp.Version)
+	if resp.Version != "1.5.0" {
+		t.Errorf("version = %q, want 1.5.0", resp.Version)
 	}
 	if resp.Status != "ok" {
 		t.Errorf("status = %q, want ok during the startup grace period", resp.Status)
@@ -795,5 +795,44 @@ func TestHandleStatus_IncludesNVMe(t *testing.T) {
 	}
 	if _, ok := resp["nvme"]; !ok {
 		t.Fatal("nvme block missing from status response")
+	}
+}
+
+// TestHandleStatus_ModeTunableAndHealth verifies the reported APU profile,
+// the internal tunable gate and the embedded health block.
+func TestHandleStatus_ModeTunableAndHealth(t *testing.T) {
+	pm := power.NewPowerManager()
+	pm.SetState(false, false, false, 0, false)
+	powerMon := power.NewPowerMonitor()
+	server := NewServer(pm, powerMon, "", nil, nil, nil, sysinfo.SystemInfo{})
+
+	withRunner(t, &fakeRunner{available: map[string]bool{"powerprofilesctl": true}})
+	if err := pm.SetPerformance("test"); err != nil {
+		t.Fatalf("SetPerformance: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/status", nil)
+	w := httptest.NewRecorder()
+	server.HandleStatus(w, req)
+
+	var resp map[string]any
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("invalid json: %v", err)
+	}
+	if resp["mode"] != "balanced" {
+		t.Errorf("mode = %v, want balanced", resp["mode"])
+	}
+	if resp["tunable_mode"] != "performance" {
+		t.Errorf("tunable_mode = %v, want performance", resp["tunable_mode"])
+	}
+	health, ok := resp["health"].(map[string]any)
+	if !ok {
+		t.Fatal("health block missing from status response")
+	}
+	if _, ok := health["status"]; !ok {
+		t.Error("health.status missing")
+	}
+	if _, ok := health["monitors"]; !ok {
+		t.Error("health.monitors missing")
 	}
 }

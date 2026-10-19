@@ -9,6 +9,7 @@ from homeassistant.components import persistent_notification
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_HOST, CONF_PORT, CONF_TOKEN, Platform
 from homeassistant.core import HomeAssistant, callback
+from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.update_coordinator import (
     CoordinatorEntity,
     DataUpdateCoordinator,
@@ -17,9 +18,49 @@ from homeassistant.helpers.update_coordinator import (
 
 from .const import DOMAIN, CONF_NOTIFY_SERVICE
 
+SERVICE_SET_MODE = "set_mode"
+SERVICE_RESET_IDLE = "reset_idle"
+SERVICE_REFRESH = "refresh"
+
 _LOGGER = logging.getLogger(__name__)
 
-PLATFORMS: list[Platform] = [Platform.SENSOR, Platform.BINARY_SENSOR, Platform.NUMBER]
+PLATFORMS: list[Platform] = [
+    Platform.SENSOR,
+    Platform.BINARY_SENSOR,
+    Platform.SELECT,
+    Platform.BUTTON,
+    Platform.NUMBER,
+]
+
+async def _async_register_services(hass: HomeAssistant) -> None:
+    """Register integration services once."""
+    if hass.services.has_service(DOMAIN, SERVICE_SET_MODE):
+        return
+
+    def _coordinators() -> list["FrameworkPowerCoordinator"]:
+        return [
+            coordinator
+            for coordinator in hass.data.get(DOMAIN, {}).values()
+            if isinstance(coordinator, FrameworkPowerCoordinator)
+        ]
+
+    async def _async_set_mode(call) -> None:
+        mode = call.data.get("mode")
+        for coordinator in _coordinators():
+            await coordinator.async_set_mode(mode)
+
+    async def _async_reset_idle(call) -> None:
+        for coordinator in _coordinators():
+            await coordinator.async_reset_idle()
+
+    async def _async_refresh(call) -> None:
+        for coordinator in _coordinators():
+            await coordinator.async_request_refresh()
+
+    hass.services.async_register(DOMAIN, SERVICE_SET_MODE, _async_set_mode)
+    hass.services.async_register(DOMAIN, SERVICE_RESET_IDLE, _async_reset_idle)
+    hass.services.async_register(DOMAIN, SERVICE_REFRESH, _async_refresh)
+
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up Framework Power Daemon from a config entry."""
@@ -36,6 +77,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     hass.data.setdefault(DOMAIN, {})
     hass.data[DOMAIN][entry.entry_id] = coordinator
 
+    await _async_register_services(hass)
+
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
 
     return True
@@ -47,6 +90,9 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         if coordinator is not None:
             coordinator.shutdown_dynamic_registrar()
         hass.data[DOMAIN].pop(entry.entry_id)
+        if not hass.data[DOMAIN]:
+            for service in (SERVICE_SET_MODE, SERVICE_RESET_IDLE, SERVICE_REFRESH):
+                hass.services.async_remove(DOMAIN, service)
 
     return unload_ok
 
@@ -149,6 +195,38 @@ class FrameworkPowerCoordinator(DataUpdateCoordinator):
             return data
         except Exception as err:
             raise UpdateFailed(f"Error communicating with API: {err}")
+
+    async def _async_post(self, path: str, payload: dict | None = None) -> dict:
+        """POST to a control endpoint on the daemon."""
+        kwargs = {"json": payload} if payload is not None else {}
+        try:
+            async with asyncio.timeout(10):
+                async with aiohttp.ClientSession() as session:
+                    async with session.post(
+                        f"{self.base_url}{path}", headers=self.headers, **kwargs
+                    ) as response:
+                        if response.status != 200:
+                            body = await response.text()
+                            raise HomeAssistantError(
+                                f"Daemon returned {response.status} for {path}: {body}"
+                            )
+                        return await response.json()
+        except HomeAssistantError:
+            raise
+        except Exception as err:
+            raise HomeAssistantError(f"Could not call {path}: {err}") from err
+
+    async def async_set_mode(self, mode: str) -> None:
+        """Apply the daemon's performance/powersave tunables."""
+        if mode not in ("performance", "powersave"):
+            raise HomeAssistantError(f"Unsupported mode: {mode}")
+        await self._async_post("/mode", {"mode": mode})
+        await self.async_request_refresh()
+
+    async def async_reset_idle(self) -> None:
+        """Reset the daemon idle timer."""
+        await self._async_post("/activity")
+        await self.async_request_refresh()
 
     @staticmethod
     def _collect_alerts(data: dict) -> list[tuple[str, str, str, str]]:

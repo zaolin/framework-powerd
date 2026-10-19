@@ -34,6 +34,7 @@ type rateBucket struct {
 // StatusResponse represents the system status
 type StatusResponse struct {
 	Mode             string                      `json:"mode"`
+	TunableMode      string                      `json:"tunable_mode"`
 	IsIdle           bool                        `json:"is_idle"`
 	SecondsUntilIdle float64                     `json:"seconds_until_idle"`
 	IsGameRunning    bool                        `json:"is_game_running"`
@@ -49,6 +50,7 @@ type StatusResponse struct {
 	NVMe             *nvme.Stats                 `json:"nvme,omitempty"`
 	GPU              *gpu.Stats                  `json:"gpu,omitempty"`
 	SystemInfo       sysinfo.SystemInfo          `json:"system_info"`
+	Health           HealthResponse              `json:"health"`
 }
 
 // MonitorHealth summarizes the state of the optional background monitors.
@@ -268,6 +270,7 @@ func (s *Server) HandleStatus(w http.ResponseWriter, r *http.Request) {
 
 	resp := StatusResponse{
 		Mode:             status.Mode,
+		TunableMode:      status.TunableMode,
 		IsIdle:           status.IsIdle,
 		SecondsUntilIdle: status.SecondsUntilIdle,
 		IsGameRunning:    status.IsGameRunning,
@@ -295,18 +298,13 @@ func (s *Server) HandleStatus(w http.ResponseWriter, r *http.Request) {
 		resp.GPU = &stats
 	}
 
+	resp.Health = s.buildHealth(status.IsIdle)
+
 	writeJSON(w, http.StatusOK, resp)
 }
 
-// HandleHealth reports daemon liveness without exposing any control-plane
-// data. It is registered without auth and is safe for systemd/monitoring
-// probes.
-func (s *Server) HandleHealth(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
+// buildHealth assembles the health payload for /healthz and /status.
+func (s *Server) buildHealth(isIdle bool) HealthResponse {
 	age := s.powerMonitor.LastSampleAge()
 	turbostat := "waiting"
 	sampleAge := 0.0
@@ -336,11 +334,11 @@ func (s *Server) HandleHealth(w http.ResponseWriter, r *http.Request) {
 		status = "degraded"
 	}
 
-	writeJSON(w, http.StatusOK, HealthResponse{
+	return HealthResponse{
 		Status:                status,
 		Version:               s.sysInfo.DaemonVersion,
 		UptimeSeconds:         uptime,
-		IsIdle:                s.pm.GetStatus().IsIdle,
+		IsIdle:                isIdle,
 		PowerSampleAgeSeconds: sampleAge,
 		MemoryUsedPercent:     memory.UsedPercent,
 		Monitors: MonitorHealth{
@@ -350,7 +348,20 @@ func (s *Server) HandleHealth(w http.ResponseWriter, r *http.Request) {
 			GPU:       s.gpuMonitor != nil,
 		},
 		MetricsState: metrics,
-	})
+	}
+}
+
+// HandleHealth reports daemon liveness without exposing any control-plane
+// data. It is registered without auth and is safe for systemd/monitoring
+// probes.
+func (s *Server) HandleHealth(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	status := s.pm.GetStatus()
+	writeJSON(w, http.StatusOK, s.buildHealth(status.IsIdle))
 }
 
 func (s *Server) HandleActivity(w http.ResponseWriter, r *http.Request) {

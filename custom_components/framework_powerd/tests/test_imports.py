@@ -82,3 +82,17 @@ def test_diagnostics_syntax():
     with open(path, 'r') as f:
         source = f.read()
     ast.parse(source)
+
+
+def test_select_syntax():
+    """Test select.py has valid Python syntax."""
+    path = os.path.join(os.path.dirname(__file__), '..', 'select.py')
+    with open(path, 'r') as f:
+        ast.parse(f.read())
+
+
+def test_button_syntax():
+    """Test button.py has valid Python syntax."""
+    path = os.path.join(os.path.dirname(__file__), '..', 'button.py')
+    with open(path, 'r') as f:
+        ast.parse(f.read())

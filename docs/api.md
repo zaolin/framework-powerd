@@ -66,6 +66,7 @@ Full daemon state. Requires auth.
 ```json
 {
   "mode": "balanced",
+  "tunable_mode": "powersave",
   "is_idle": false,
   "seconds_until_idle": 241.5,
   "is_game_running": true,
@@ -144,15 +145,18 @@ Full daemon state. Requires auth.
     "cpu_model": "AMD Ryzen AI 7 350 w/ Radeon 860M",
     "cpu_count": 16,
     "total_ram_bytes": 50010562560,
-    "daemon_version": "1.4.0"
+    "daemon_version": "1.5.0"
   }
 }
 ```
 
 Notes:
 
-- `mode` is always `balanced`: the APU profile trio is pinned. The internal
-  performance/powersave gate only selects the secondary tunables.
+- `mode` is always `balanced`: the APU profile trio is pinned.
+- `tunable_mode` is the internal gate: `performance` or `powersave`. It only
+  selects the secondary tunables (ASPM, powertop, USB/audio latency).
+- `health` mirrors the `/healthz` payload: overall status, turbostat/NVMe
+  monitor state, power sample age and metrics persistence status.
 - `smartd` is added when SMART monitoring is enabled. `gpu` is added when GPU
   monitoring is enabled.
 - `power.current.estimated_total_watts` includes peripheral estimates and VRM

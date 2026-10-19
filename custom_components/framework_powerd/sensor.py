@@ -37,6 +37,9 @@ async def async_setup_entry(
         EnergySensor(coordinator, "energy_24h_kwh", "Energy (24h)", "24h"),
         EnergySensor(coordinator, "energy_7d_kwh", "Energy (7 Days)", "7d"),
         LifetimeEnergySensor(coordinator),
+        TunableModeSensor(coordinator),
+        DaemonHealthSensor(coordinator),
+        NVMeStatusSensor(coordinator),
     ]
 
     def _memory_entities(coord):
@@ -163,7 +166,30 @@ class PowerModeSensor(FrameworkEntity, SensorEntity):
 
     @property
     def native_value(self):
-        return self.coordinator.data.get("mode")
+        mode = self.coordinator.data.get("mode")
+        # Older daemons reported the internal tunable gate here. The pinned
+        # APU profile is always "balanced".
+        if mode in ("performance", "powersave"):
+            return "balanced"
+        return mode
+
+
+class TunableModeSensor(FrameworkEntity, SensorEntity):
+    """Internal performance/powersave tunable gate (diagnostic)."""
+
+    _attr_name = "Tunable Mode"
+    _attr_unique_id = "tunable_mode"
+    _attr_icon = "mdi:tune"
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+
+    @property
+    def native_value(self):
+        data = self.coordinator.data
+        mode = data.get("tunable_mode")
+        if not mode:
+            legacy = data.get("mode")
+            mode = legacy if legacy in ("performance", "powersave") else None
+        return mode
 
 
 class GamePIDSensor(FrameworkEntity, SensorEntity):
@@ -710,6 +736,87 @@ NVME_SENSOR_CLASSES = [
     NVMePowerOnHoursSensor,
     NVMeUnsafeShutdownsSensor,
 ]
+
+
+class NVMeStatusSensor(FrameworkEntity, SensorEntity):
+    """Aggregated NVMe polling status and diagnostics."""
+
+    _attr_name = "NVMe Status"
+    _attr_unique_id = "nvme_status"
+    _attr_icon = "mdi:harddisk"
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+
+    @property
+    def _nvme(self):
+        return self.coordinator.data.get("nvme") or {}
+
+    @property
+    def native_value(self):
+        nvme = self._nvme
+        if not nvme or not nvme.get("enabled", True):
+            return "disabled"
+        if nvme.get("last_error"):
+            return "error"
+        devices = nvme.get("devices") or []
+        if not devices:
+            return "no_devices"
+        health = [device.get("health", "ok") for device in devices]
+        if "critical" in health:
+            return "critical"
+        if "warning" in health:
+            return "warning"
+        return "ok"
+
+    @property
+    def extra_state_attributes(self):
+        nvme = self._nvme
+        devices = nvme.get("devices") or []
+        return {
+            "enabled": nvme.get("enabled"),
+            "last_error": nvme.get("last_error"),
+            "last_update": nvme.get("last_update"),
+            "device_count": len(devices),
+            "devices": [
+                {
+                    "device": device.get("device"),
+                    "health": device.get("health"),
+                    "issues": device.get("issues") or [],
+                }
+                for device in devices
+            ],
+        }
+
+
+class DaemonHealthSensor(FrameworkEntity, SensorEntity):
+    """Overall daemon health from /status.health."""
+
+    _attr_name = "Daemon Health"
+    _attr_unique_id = "daemon_health"
+    _attr_icon = "mdi:heart-pulse"
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+
+    @property
+    def _health(self):
+        return self.coordinator.data.get("health") or {}
+
+    @property
+    def native_value(self):
+        return self._health.get("status", "unknown")
+
+    @property
+    def extra_state_attributes(self):
+        health = self._health
+        monitors = health.get("monitors") or {}
+        return {
+            "version": health.get("version"),
+            "turbostat": monitors.get("turbostat"),
+            "smartd": monitors.get("smartd"),
+            "nvme": monitors.get("nvme"),
+            "gpu": monitors.get("gpu"),
+            "power_sample_age_seconds": health.get("power_sample_age_seconds"),
+            "memory_used_percent": health.get("memory_used_percent"),
+            "metrics_state": health.get("metrics_state"),
+        }
 
 
 # System Info Sensors

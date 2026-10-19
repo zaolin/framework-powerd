@@ -105,7 +105,8 @@ class StorageHealthBinarySensor(FrameworkEntity, BinarySensorEntity):
                 }
             )
         nvme = self.coordinator.data.get("nvme", {})
-        for device in nvme.get("devices", []):
+        devices = nvme.get("devices") or []
+        for device in devices:
             if device.get("health") in ("warning", "critical"):
                 issues.append(
                     {
@@ -115,4 +116,14 @@ class StorageHealthBinarySensor(FrameworkEntity, BinarySensorEntity):
                         "message": "; ".join(device.get("issues") or []),
                     }
                 )
-        return {"issues": issues}
+        return {
+            "issues": issues,
+            "smartd_last_check": smartd.get("last_check"),
+            "nvme_enabled": nvme.get("enabled"),
+            "nvme_status": "error"
+            if nvme.get("last_error")
+            else ("no_devices" if not devices else "ok"),
+            "nvme_last_error": nvme.get("last_error"),
+            "nvme_last_update": nvme.get("last_update"),
+            "nvme_device_count": len(devices),
+        }

@@ -15,6 +15,8 @@ A Go daemon to automatically manage power profiles on the **Framework Desktop**,
 - **SMART Health Monitoring**: Monitors smartd journald logs, keeps sticky persisted alerts, and classifies health, wear and sector failures.
 - **NVMe Health Polling**: Directly polls `nvme smart-log`/`smartctl` for wear, available spare, media errors, error-log growth and temperature, with configurable warning/critical thresholds.
 - **Storage Notifications**: Home Assistant persistent notifications and optional `notify_service` calls for new SMART/NVMe warnings.
+- **HA Controls**: Select entity for performance/powersave, button to reset the idle timer, and `framework_powerd.*` services for automations.
+- **Daemon Health**: `/status.health` and a diagnostic HA sensor expose turbostat, NVMe, metrics persistence and overall daemon status.
 - **Persistent Energy Metrics**: 24h, 7d and lifetime energy aggregates survive daemon restarts (atomic JSON state file).
 - **Health Endpoint**: Unauthenticated `/healthz` with monitor and persistence status for systemd/monitoring probes.
 - **REST API**: Allows manual mode overriding, idle resetting, and usage statistics.
@@ -296,7 +298,10 @@ This project is compatible with [HACS](https://hacs.xyz/) (Home Assistant Commun
     *   **JWT Secret**: If you started the daemon with a secret.
 
 **Sensors Provided** (full table in [Home Assistant entities](docs/home_assistant.md)):
-*   **Power Mode**: `balanced` (the APU profile trio is pinned; the mode endpoint still accepts `performance`/`powersave` to switch the secondary tunables)
+*   **Power Mode**: `balanced` (the APU profile trio is pinned)
+*   **Tunable Mode**: `performance` / `powersave` (diagnostic; selectable via the `Power Tunable Mode` select entity)
+*   **Reset Idle Timer**: button
+*   **Daemon Health**: `ok` / `degraded` with turbostat, NVMe and persistence details (diagnostic)
 *   **System Idle**: `True` / `False`
 *   **Game Status**: PID and Running/Paused state
 *   **Power Usage**: Estimated total and peripheral power (Watts)
@@ -321,6 +326,8 @@ This project is compatible with [HACS](https://hacs.xyz/) (Home Assistant Commun
 ### API Control
 
 Trigger modes manually using the REST API (default port 8080). Both `performance` and `powersave` re-assert the balanced APU profile; they switch only the secondary tunables (ASPM, powertop, USB/audio latency). The full reference is in [REST API](docs/api.md).
+
+The Home Assistant integration exposes the same actions as `framework_powerd.set_mode`, `framework_powerd.reset_idle` and `framework_powerd.refresh` services, plus a select entity and reset button.
 
 If JWT authentication is enabled, you must export your token first:
 ```bash

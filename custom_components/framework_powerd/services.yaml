@@ -1,0 +1,22 @@
+set_mode:
+  name: Set tunable mode
+  description: Apply the daemon's performance or powersave tunables.
+  fields:
+    mode:
+      name: Mode
+      description: performance applies active tunables; powersave applies idle tunables.
+      required: true
+      example: performance
+      selector:
+        select:
+          options:
+            - performance
+            - powersave
+
+reset_idle:
+  name: Reset idle timer
+  description: Reset the daemon's inactivity timer without changing the mode.
+
+refresh:
+  name: Refresh
+  description: Poll the daemon immediately instead of waiting for the next interval.

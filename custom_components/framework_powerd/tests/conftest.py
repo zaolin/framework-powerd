@@ -24,6 +24,7 @@ def mock_coordinator():
     coord.headers = {}
     coord.data = {
         "mode": "balanced",
+        "tunable_mode": "powersave",
         "is_idle": False,
         "seconds_until_idle": 300,
         "is_game_running": False,
@@ -95,6 +96,25 @@ def mock_coordinator():
                 }
             ],
         },
+        "health": {
+            "status": "ok",
+            "version": "1.5.0",
+            "uptime_seconds": 1234.0,
+            "is_idle": False,
+            "power_sample_age_seconds": 1.0,
+            "memory_used_percent": 57.1,
+            "monitors": {
+                "turbostat": "ok",
+                "smartd": True,
+                "nvme": "ok",
+                "gpu": True,
+            },
+            "metrics_state": {
+                "enabled": True,
+                "state_file": "/var/lib/framework-powerd/metrics.json",
+                "last_saved_at": "2026-01-01T00:00:00Z",
+            },
+        },
         "system_info": {
             "kernel_version": "6.12.1-cachyos-x86_64",
             "os_name": "CachyOS",
@@ -102,7 +122,7 @@ def mock_coordinator():
             "cpu_model": "AMD Ryzen AI 7 350 w/ Radeon 860M",
             "cpu_count": 16,
             "total_ram_bytes": 48838284 * 1024,
-            "daemon_version": "1.4.0",
+            "daemon_version": "1.5.0",
         },
         "gpu": {
             "vram_used_bytes": 2984828928,

@@ -4,6 +4,25 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 semantic versioning.
 
+## [1.5.0] - 2026-10-19
+
+### Added
+
+- `tunable_mode` in `/status` and a diagnostic HA Tunable Mode sensor.
+- `health` block in `/status` mirroring `/healthz`.
+- HA Daemon Health and NVMe Status diagnostic sensors.
+- NVMe poll error/device-count details in the Storage Health attributes.
+- HA select entity for performance/powersave and a reset-idle button.
+- HA services `framework_powerd.set_mode`, `framework_powerd.reset_idle` and
+  `framework_powerd.refresh`.
+
+### Changed
+
+- `/status.mode` now reports the pinned APU profile (`balanced`); the internal
+  performance/powersave gate moved to `tunable_mode`.
+- Home Assistant Power Mode maps legacy `performance`/`powersave` values to
+  `balanced`.
+
 ## [1.4.0] - 2026-10-19
 
 ### Added

@@ -297,7 +297,7 @@ type mockIdleMonitor struct {
 }
 
 func (m *mockIdleMonitor) GetTimeUntilIdle() time.Duration { return m.remaining }
-func (m *mockIdleMonitor) ResetActivity()                   { m.resetCount++ }
+func (m *mockIdleMonitor) ResetActivity()                  { m.resetCount++ }
 
 type countingRunner struct {
 	available map[string]bool
@@ -355,5 +355,41 @@ func TestGetNetworkDeviceStatusFromDir_Empty(t *testing.T) {
 	statuses := getNetworkDeviceStatusFromDir(netDir)
 	if len(statuses) != 0 {
 		t.Errorf("expected 0 statuses for empty dir, got %d", len(statuses))
+	}
+}
+
+// TestGetStatus_ModeReporting verifies that GetStatus reports the pinned APU
+// profile ("balanced") and exposes the internal tunable gate separately.
+func TestGetStatus_ModeReporting(t *testing.T) {
+	orig := CommandRunner()
+	t.Cleanup(func() { SetCommandRunner(orig) })
+	SetCommandRunner(&fakeRunner{available: map[string]bool{"powerprofilesctl": true}})
+
+	pm := NewPowerManager()
+	status := pm.GetStatus()
+	if status.Mode != "" || status.TunableMode != "" {
+		t.Errorf("initial mode = %q/%q, want empty/empty", status.Mode, status.TunableMode)
+	}
+
+	if err := pm.SetPerformance("test"); err != nil {
+		t.Fatalf("SetPerformance: %v", err)
+	}
+	status = pm.GetStatus()
+	if status.Mode != "balanced" {
+		t.Errorf("mode = %q, want balanced", status.Mode)
+	}
+	if status.TunableMode != "performance" {
+		t.Errorf("tunable_mode = %q, want performance", status.TunableMode)
+	}
+
+	if err := pm.SetPowersave("test"); err != nil {
+		t.Fatalf("SetPowersave: %v", err)
+	}
+	status = pm.GetStatus()
+	if status.Mode != "balanced" {
+		t.Errorf("mode = %q, want balanced", status.Mode)
+	}
+	if status.TunableMode != "powersave" {
+		t.Errorf("tunable_mode = %q, want powersave", status.TunableMode)
 	}
 }

@@ -84,6 +84,7 @@ func (pm *PowerManager) SetState(idle, remote, game bool, pid int, paused bool) 
 // Status represents the power manager state
 type Status struct {
 	Mode             string                `json:"mode"`
+	TunableMode      string                `json:"tunable_mode"`
 	IsIdle           bool                  `json:"is_idle"`
 	IsRemotePlay     bool                  `json:"is_remote_play"`
 	IsGameRunning    bool                  `json:"is_game_running"`
@@ -109,8 +110,18 @@ func (pm *PowerManager) GetStatus() Status {
 		secondsUntilIdle = pm.idleMonitor.GetTimeUntilIdle().Seconds()
 	}
 
+	// The externally reported mode is the pinned APU profile. Keep the
+	// internal performance/powersave gate in TunableMode so callers can see
+	// which secondary tunables are active without confusing it with the APU
+	// profile.
+	mode := ""
+	if pm.currentMode != "" {
+		mode = "balanced"
+	}
+
 	return Status{
-		Mode:             pm.currentMode,
+		Mode:             mode,
+		TunableMode:      pm.currentMode,
 		IsIdle:           pm.isIdle,
 		IsRemotePlay:     pm.isRemotePlay,
 		IsGameRunning:    pm.isGameRunning,

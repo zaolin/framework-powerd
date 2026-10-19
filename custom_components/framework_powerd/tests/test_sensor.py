@@ -116,7 +116,7 @@ class TestSystemInfoSensors:
         from custom_components.framework_powerd.sensor import DaemonVersionSensor
 
         sensor = DaemonVersionSensor(mock_coordinator)
-        assert sensor.native_value == "1.4.0"
+        assert sensor.native_value == "1.5.0"
 
     def test_kernel_version_unique_id(self, mock_coordinator):
         from custom_components.framework_powerd.sensor import KernelVersionSensor
@@ -214,16 +214,16 @@ class TestPowerModeSensor:
         sensor = PowerModeSensor(mock_coordinator)
         assert sensor.native_value == "balanced"
 
-    def test_native_value_passthrough_legacy_values(self, mock_coordinator):
-        """Older daemons may still report performance/powersave — display as-is."""
+    def test_native_value_maps_legacy_values_to_balanced(self, mock_coordinator):
+        """Older daemons reported the tunable gate; the APU profile is balanced."""
         from custom_components.framework_powerd.sensor import PowerModeSensor
 
         mock_coordinator.data["mode"] = "performance"
         sensor = PowerModeSensor(mock_coordinator)
-        assert sensor.native_value == "performance"
+        assert sensor.native_value == "balanced"
 
         mock_coordinator.data["mode"] = "powersave"
-        assert sensor.native_value == "powersave"
+        assert sensor.native_value == "balanced"
 
     def test_native_value_missing_mode(self, mock_coordinator):
         """Missing mode key should return None, not raise."""
@@ -500,3 +500,75 @@ class TestNVMeSensors:
         assert len(keys) == len(set(keys))
         assert "health" in keys
         assert "percentage_used" in keys
+
+
+class TestTunableModeSensor:
+    """Test the diagnostic tunable-mode sensor."""
+
+    def test_native_value(self, mock_coordinator):
+        from custom_components.framework_powerd.sensor import TunableModeSensor
+
+        assert TunableModeSensor(mock_coordinator).native_value == "powersave"
+
+    def test_legacy_mode_fallback(self, mock_coordinator):
+        from custom_components.framework_powerd.sensor import TunableModeSensor
+
+        del mock_coordinator.data["tunable_mode"]
+        mock_coordinator.data["mode"] = "performance"
+        assert TunableModeSensor(mock_coordinator).native_value == "performance"
+
+    def test_unique_id(self, mock_coordinator):
+        from custom_components.framework_powerd.sensor import TunableModeSensor
+
+        assert TunableModeSensor(mock_coordinator)._attr_unique_id == "tunable_mode"
+
+
+class TestDaemonHealthSensor:
+    """Test the daemon health sensor."""
+
+    def test_native_value(self, mock_coordinator):
+        from custom_components.framework_powerd.sensor import DaemonHealthSensor
+
+        sensor = DaemonHealthSensor(mock_coordinator)
+        assert sensor.native_value == "ok"
+        attrs = sensor.extra_state_attributes
+        assert attrs["turbostat"] == "ok"
+        assert attrs["nvme"] == "ok"
+        assert attrs["metrics_state"]["enabled"] is True
+
+    def test_missing_health(self, mock_coordinator):
+        from custom_components.framework_powerd.sensor import DaemonHealthSensor
+
+        del mock_coordinator.data["health"]
+        assert DaemonHealthSensor(mock_coordinator).native_value == "unknown"
+
+
+class TestNVMeStatusSensor:
+    """Test the aggregated NVMe status sensor."""
+
+    def test_ok(self, mock_coordinator):
+        from custom_components.framework_powerd.sensor import NVMeStatusSensor
+
+        sensor = NVMeStatusSensor(mock_coordinator)
+        assert sensor.native_value == "ok"
+        attrs = sensor.extra_state_attributes
+        assert attrs["device_count"] == 1
+        assert attrs["last_error"] is None
+
+    def test_error(self, mock_coordinator):
+        from custom_components.framework_powerd.sensor import NVMeStatusSensor
+
+        mock_coordinator.data["nvme"]["last_error"] = "permission denied"
+        assert NVMeStatusSensor(mock_coordinator).native_value == "error"
+
+    def test_no_devices(self, mock_coordinator):
+        from custom_components.framework_powerd.sensor import NVMeStatusSensor
+
+        mock_coordinator.data["nvme"]["devices"] = []
+        assert NVMeStatusSensor(mock_coordinator).native_value == "no_devices"
+
+    def test_missing_block(self, mock_coordinator):
+        from custom_components.framework_powerd.sensor import NVMeStatusSensor
+
+        del mock_coordinator.data["nvme"]
+        assert NVMeStatusSensor(mock_coordinator).native_value == "disabled"

@@ -24,6 +24,10 @@ framework-powerd token --jwt-secret="mysecret"
 | Entity | Type | Source |
 |---|---|---|
 | Power Mode | sensor | `mode` (always `balanced`) |
+| Tunable Mode | sensor (diagnostic) | `tunable_mode` (`performance`/`powersave`) |
+| Power Tunable Mode | select | sets `performance`/`powersave` via `/mode` |
+| Reset Idle Timer | button | calls `/activity` |
+| Daemon Health | sensor (diagnostic) | `health` block from `/status` |
 | System Idle | binary sensor | `is_idle` |
 | Remote Play Active | binary sensor | `is_remote_play` |
 | Game Running | binary sensor | `is_game_running` |
@@ -110,6 +114,12 @@ Only present when `nvme.enabled` is true and devices are detected.
 | NVMe `<device>` Power-On Hours | h | `power_on_hours` |
 | NVMe `<device>` Unsafe Shutdowns | count | `unsafe_shutdowns` |
 
+`NVMe Status` is an aggregated diagnostic sensor. Its state is `ok`, `warning`,
+`critical`, `error`, `no_devices` or `disabled`, and its attributes include
+`last_error`, `last_update`, `device_count` and per-device issues. Use it to
+diagnose why per-device sensors are missing (for example `nvme`/`smartctl` not
+installed or no access to `/dev/nvme*`).
+
 ### Storage health
 
 | Entity | Type | Meaning |
@@ -117,6 +127,17 @@ Only present when `nvme.enabled` is true and devices are detected.
 | Storage Health | binary sensor (`problem`) | on when any SMART alert or NVMe device is warning/critical |
 
 The `issues` attribute lists the source, device, severity and message.
+
+## Services
+
+| Service | Fields | Action |
+|---|---|---|
+| `framework_powerd.set_mode` | `mode`: `performance`/`powersave` | Calls `/mode` |
+| `framework_powerd.reset_idle` | — | Calls `/activity` |
+| `framework_powerd.refresh` | — | Polls the daemon immediately |
+
+These can be used in automations, scripts and dashboards. The select and button
+entities call the same coordinator methods.
 
 ## Notifications
 
@@ -175,6 +196,10 @@ entities:
   - sensor.gpu_gtt_free
   - sensor.gpu_gtt_usage
   - sensor.cpu_usage
+  - sensor.daemon_health
+  - sensor.nvme_status
+  - select.framework_power_daemon_power_tunable_mode
+  - button.framework_power_daemon_reset_idle_timer
   - binary_sensor.storage_health
   - sensor.nvme_dev_nvme0_health
   - sensor.nvme_dev_nvme0_percentage_used

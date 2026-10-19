@@ -151,6 +151,27 @@ from warning to critical notifies immediately.
   warning/critical. You can build your own automation from it.
 - Check Home Assistant logs for `Could not call notify.*`.
 
+## GTT sensors show MiB instead of GiB
+
+Check the entity registry override:
+
+**Settings → Devices & Services → Entities → search “GPU GTT Used” → gear →
+Unit of measurement** — clear the old `MiB` override or select `GiB`. Repeat for
+`GPU GTT Total` and `GPU GTT Free`. The integration code already reports GiB.
+
+## Daemon Health is degraded / NVMe Status is not ok
+
+- `Daemon Health` mirrors `/healthz`. Its attributes show turbostat, NVMe and
+  metrics persistence state.
+- `NVMe Status` is `error` when the last poll failed; check `last_error`.
+  Common causes: `nvme`/`smartctl` missing, no access to `/dev/nvme*`, or the
+  device is not visible inside a container.
+- `NVMe Status` is `no_devices` when polling works but no controllers were
+  discovered.
+- `NVMe Status` is `disabled` when `nvme.enabled` is false or no tool exists.
+- The per-device NVMe sensors are only created when at least one device is
+  discovered.
+
 ## API returns 429
 
 `/mode` and `/activity` are limited to 1 request/second with a burst of 5 per
