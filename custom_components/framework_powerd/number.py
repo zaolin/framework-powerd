@@ -10,10 +10,11 @@ from homeassistant.components.number import (
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import UnitOfTime
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers.entity import EntityCategory
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
-from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import DOMAIN
+from .entity import FrameworkEntity
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -27,27 +28,12 @@ async def async_setup_entry(
     async_add_entities([FrameworkPowerPollingInterval(coordinator)])
 
 
-class FrameworkEntity(CoordinatorEntity):
-    """Base entity."""
-
-    def __init__(self, coordinator):
-        super().__init__(coordinator)
-        self._attr_has_entity_name = True
-    
-    @property
-    def device_info(self):
-        return {
-            "identifiers": {(DOMAIN, f"{self.coordinator.host}:{self.coordinator.port}")},
-            "name": "Framework Power Daemon",
-            "manufacturer": "Framework",
-            "model": "Power Daemon",
-        }
-
 class FrameworkPowerPollingInterval(FrameworkEntity, RestoreNumber):
     """Number entity to configure the polling interval."""
     
     _attr_name = "Polling Interval"
     _attr_unique_id = "polling_interval"
+    _attr_entity_category = EntityCategory.CONFIG
     _attr_native_min_value = 1
     _attr_native_max_value = 600
     _attr_native_step = 1

@@ -117,6 +117,22 @@ func (m *Monitor) Start(ctx context.Context) error {
 	}
 }
 
+// deriveUsage returns the free bytes and used percentage for a used/total
+// pair. It clamps impossible sysfs values (used > total) and treats a zero
+// total as "unknown" rather than dividing by zero.
+func deriveUsage(used, total int64) (free int64, percent float64) {
+	if total <= 0 {
+		return 0, 0
+	}
+	if used < 0 {
+		used = 0
+	}
+	if used > total {
+		used = total
+	}
+	return total - used, float64(used) / float64(total) * 100
+}
+
 func (m *Monitor) updateStats() error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -128,8 +144,10 @@ func (m *Monitor) updateStats() error {
 
 	m.stats.VRAMUsedBytes = vramUsed
 	m.stats.VRAMTotalBytes = vramTotal
+	m.stats.VRAMFreeBytes, m.stats.VRAMUsedPercent = deriveUsage(vramUsed, vramTotal)
 	m.stats.GTTUsedBytes = gttUsed
 	m.stats.GTTTotalBytes = gttTotal
+	m.stats.GTTFreeBytes, m.stats.GTTUsedPercent = deriveUsage(gttUsed, gttTotal)
 
 	if m.hwmonPath != "" {
 		m.stats.TemperatureC = m.readTemperature()

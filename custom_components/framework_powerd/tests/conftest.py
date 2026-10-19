@@ -13,7 +13,7 @@ from unittest.mock import MagicMock
 def mock_coordinator():
     """Return a MagicMock coordinator pre-loaded with representative data.
 
-    The shape mirrors the /status + /ollama/stats JSON the Go daemon emits,
+    The shape mirrors the /status JSON the Go daemon emits,
     so sensor/binary_sensor entity tests can read .data without a live HA setup.
     """
     coord = MagicMock()
@@ -41,42 +41,22 @@ def mock_coordinator():
             },
             "energy_24h_kwh": 0.5,
             "energy_7d_kwh": 3.5,
+            "lifetime_energy_kwh": 42.125,
         },
         "network_devices": [],
+        "memory": {
+            "total_bytes": 48838284 * 1024,
+            "free_bytes": 8 * 1024**3,
+            "available_bytes": 20 * 1024**3,
+            "used_bytes": 48838284 * 1024 - 20 * 1024**3,
+            "used_percent": (48838284 * 1024 - 20 * 1024**3) / (48838284 * 1024) * 100,
+        },
         "smartd": {
             "alerts": [
                 {"device": "/dev/sda", "fail_type": "SelfTest", "message": "FAILED SMART self-test"},
             ],
             "last_check": "2026-01-01T00:00:00Z",
             "notify_service": "notify.mobile_phone",
-        },
-        "ollama": {
-            "by_ip": {},
-            "by_group": {},
-            "ungrouped": {"count": 0},
-            "currency": "EUR",
-            "price_per_kwh": 0.30,
-            "ollama_version": "0.23.0",
-            "models": [
-                {
-                    "name": "llama3:8b",
-                    "model": "llama3:8b",
-                    "size": 4661219072,
-                    "size_vram": 4000000000,
-                    "digest": "a6990ed6b5e1f3d4",
-                    "details": {
-                        "parent_model": "",
-                        "format": "gguf",
-                        "family": "llama",
-                        "families": ["llama"],
-                        "parameter_size": "8.0B",
-                        "quantization_level": "Q4_K_M",
-                    },
-                    "expires_at": "",
-                    "context_length": 8192,
-                },
-            ],
-            "loaded_vram_bytes": 4000000000,
         },
         "system_info": {
             "kernel_version": "6.12.1-cachyos-x86_64",
@@ -85,13 +65,17 @@ def mock_coordinator():
             "cpu_model": "AMD Ryzen AI 7 350 w/ Radeon 860M",
             "cpu_count": 16,
             "total_ram_bytes": 48838284 * 1024,
-            "daemon_version": "1.2.0",
+            "daemon_version": "1.3.0",
         },
         "gpu": {
             "vram_used_bytes": 2984828928,
             "vram_total_bytes": 17179869184,
+            "vram_free_bytes": 17179869184 - 2984828928,
+            "vram_used_percent": 2984828928 / 17179869184 * 100,
             "gtt_used_bytes": 1143558144,
             "gtt_total_bytes": 25001775104,
+            "gtt_free_bytes": 25001775104 - 1143558144,
+            "gtt_used_percent": 1143558144 / 25001775104 * 100,
             "cpu_usage_percent": 0.6,
             "temperature_celsius": 49,
             "power_watts": 9.0,

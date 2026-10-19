@@ -4,14 +4,6 @@
     "port": 8080,
     "idle_timeout": "5m"
   },
-  "ollama": {
-    "enabled": true,
-    "service_unit": "ollama.service",
-    "groups": [
-      {"name": "lan", "cidrs": ["192.168.0.0/16", "10.0.0.0/8"]},
-      {"name": "tailscale", "cidrs": ["100.64.0.0/10"]}
-    ]
-  },
   "smartd": {
     "enabled": true,
     "service_unit": "smartd.service",
@@ -22,9 +14,10 @@
     "enabled": true,
     "poll_interval": "5s"
   },
-  "pricing": {
-    "energy_price_per_kwh": 0.32,
-    "currency": "EUR"
+  "metrics": {
+    "persist": true,
+    "state_file": "/var/lib/framework-powerd/metrics.json",
+    "save_interval": "5m"
   },
   "peripherals": {
     "vrm_loss_percent": 7,

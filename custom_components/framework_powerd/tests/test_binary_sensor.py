@@ -42,3 +42,21 @@ class TestSmartdAlertBinarySensor:
         
         sensor = SmartdAlertBinarySensor(mock_coordinator)
         assert sensor._attr_name == "SMART Alert"
+
+
+class TestGameRunningBinarySensor:
+    """Test GameRunningBinarySensor uses the daemon's is_game_running field."""
+
+    def test_uses_is_game_running_not_pid(self, mock_coordinator):
+        from custom_components.framework_powerd.binary_sensor import GameRunningBinarySensor
+
+        mock_coordinator.data["is_game_running"] = True
+        mock_coordinator.data["game_pid"] = 0
+        assert GameRunningBinarySensor(mock_coordinator).is_on is True
+
+    def test_off_when_not_running(self, mock_coordinator):
+        from custom_components.framework_powerd.binary_sensor import GameRunningBinarySensor
+
+        mock_coordinator.data["is_game_running"] = False
+        mock_coordinator.data["game_pid"] = 4242
+        assert GameRunningBinarySensor(mock_coordinator).is_on is False

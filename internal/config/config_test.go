@@ -68,7 +68,7 @@ func TestAlertRetention_ValidDurations(t *testing.T) {
 	}{
 		{"30s", 30 * time.Second},
 		{"5m", 5 * time.Minute},
-		{"1h", 1 * time.Hour},
+		{"1h", time.Hour},
 		{"90s", 90 * time.Second},
 		{"2h30m", 2*time.Hour + 30*time.Minute},
 	}
@@ -120,15 +120,18 @@ func TestConfig_LoadFile(t *testing.T) {
 	configPath := filepath.Join(tmpDir, "config.json")
 
 	configContent := `{
-		"server": {"address": "0.0.0.0", "port": 9090},
-		"ollama": {"enabled": false},
+		"server": {"address": "0.0.0.0", "port": 9090, "idle_timeout": "10m"},
 		"smartd": {
 			"enabled": true,
 			"service_unit": "smartd.service",
 			"notify_service": "notify.mobile_phone",
 			"alert_retention": "1m"
 		},
-		"pricing": {"energy_price_per_kwh": 0.40, "currency": "USD"}
+		"metrics": {
+			"persist": true,
+			"state_file": "/tmp/metrics.json",
+			"save_interval": "2m"
+		}
 	}`
 
 	if err := os.WriteFile(configPath, []byte(configContent), 0644); err != nil {
@@ -146,14 +149,23 @@ func TestConfig_LoadFile(t *testing.T) {
 	if cfg.Server.Port != 9090 {
 		t.Errorf("Expected Port 9090, got %d", cfg.Server.Port)
 	}
+	if cfg.Server.GetIdleTimeout() != 10*time.Minute {
+		t.Errorf("Expected idle timeout 10m, got %v", cfg.Server.GetIdleTimeout())
+	}
 	if !cfg.Smartd.Enabled {
 		t.Error("Expected Smartd.Enabled true")
 	}
 	if cfg.Smartd.AlertRetention != "1m" {
 		t.Errorf("Expected AlertRetention '1m', got %s", cfg.Smartd.AlertRetention)
 	}
-	if cfg.Pricing.EnergyPricePerKWh != 0.40 {
-		t.Errorf("Expected EnergyPricePerKWh 0.40, got %f", cfg.Pricing.EnergyPricePerKWh)
+	if !cfg.Metrics.Persist {
+		t.Error("Expected Metrics.Persist true")
+	}
+	if cfg.Metrics.StateFile != "/tmp/metrics.json" {
+		t.Errorf("Expected StateFile '/tmp/metrics.json', got %s", cfg.Metrics.StateFile)
+	}
+	if cfg.Metrics.GetSaveInterval() != 2*time.Minute {
+		t.Errorf("Expected save interval 2m, got %v", cfg.Metrics.GetSaveInterval())
 	}
 }
 
@@ -169,14 +181,14 @@ func TestConfig_LoadDefaults(t *testing.T) {
 	if cfg.Server.IdleTimeout != "5m" {
 		t.Errorf("Expected default IdleTimeout '5m', got %s", cfg.Server.IdleTimeout)
 	}
-	if cfg.Ollama.Enabled != false {
-		t.Errorf("Expected default Ollama.Enabled false, got %v", cfg.Ollama.Enabled)
+	if !cfg.Metrics.Persist {
+		t.Error("Expected metrics persistence to be enabled by default")
 	}
-	if cfg.Pricing.EnergyPricePerKWh != 0.30 {
-		t.Errorf("Expected default EnergyPricePerKWh 0.30, got %f", cfg.Pricing.EnergyPricePerKWh)
+	if cfg.Metrics.StateFile != DefaultMetricsStateFile {
+		t.Errorf("Expected default state file %q, got %q", DefaultMetricsStateFile, cfg.Metrics.StateFile)
 	}
-	if cfg.Pricing.Currency != "EUR" {
-		t.Errorf("Expected default Currency 'EUR', got %s", cfg.Pricing.Currency)
+	if cfg.Metrics.GetSaveInterval() != 5*time.Minute {
+		t.Errorf("Expected default save interval 5m, got %v", cfg.Metrics.GetSaveInterval())
 	}
 }
 
@@ -197,41 +209,55 @@ func TestConfig_ServerGetIdleTimeout(t *testing.T) {
 	}
 }
 
-func TestConfig_OllamaGroups(t *testing.T) {
-	tmpDir := t.TempDir()
-	configPath := filepath.Join(tmpDir, "config.json")
+func TestServerConfig_Validate(t *testing.T) {
+	valid := &ServerConfig{Port: 8080, IdleTimeout: "5m"}
+	if err := valid.Validate(); err != nil {
+		t.Errorf("valid config rejected: %v", err)
+	}
 
-	configContent := `{
-		"server": {"address": "localhost", "port": 8080},
-		"ollama": {
-			"enabled": true,
-			"service_unit": "ollama.service",
-			"groups": [
-				{"name": "lan", "cidrs": ["192.168.0.0/16", "10.0.0.0/8"]},
-				{"name": "tailscale", "cidrs": ["100.64.0.0/10"]}
-			]
+	invalidPort := &ServerConfig{Port: 0}
+	if err := invalidPort.Validate(); err == nil {
+		t.Error("expected port 0 to be rejected")
+	}
+
+	invalidTimeout := &ServerConfig{Port: 8080, IdleTimeout: "soon"}
+	if err := invalidTimeout.Validate(); err == nil {
+		t.Error("expected invalid idle_timeout to be rejected")
+	}
+
+	zeroTimeout := &ServerConfig{Port: 8080, IdleTimeout: "0s"}
+	if err := zeroTimeout.Validate(); err == nil {
+		t.Error("expected zero idle_timeout to be rejected")
+	}
+}
+
+func TestMetricsConfig_Validate(t *testing.T) {
+	disabled := &MetricsConfig{Persist: false}
+	if err := disabled.Validate(); err != nil {
+		t.Errorf("disabled persistence should validate: %v", err)
+	}
+
+	missingPath := &MetricsConfig{Persist: true, StateFile: ""}
+	if err := missingPath.Validate(); err == nil {
+		t.Error("expected missing state_file to be rejected")
+	}
+
+	badInterval := &MetricsConfig{Persist: true, StateFile: "/tmp/x", SaveInterval: "nope"}
+	if err := badInterval.Validate(); err == nil {
+		t.Error("expected invalid save_interval to be rejected")
+	}
+
+	valid := &MetricsConfig{Persist: true, StateFile: "/tmp/x", SaveInterval: "5m"}
+	if err := valid.Validate(); err != nil {
+		t.Errorf("valid metrics config rejected: %v", err)
+	}
+}
+
+func TestMetricsConfig_GetSaveIntervalFallback(t *testing.T) {
+	for _, input := range []string{"", "invalid", "0s", "-1m"} {
+		cfg := &MetricsConfig{SaveInterval: input}
+		if d := cfg.GetSaveInterval(); d != 5*time.Minute {
+			t.Errorf("GetSaveInterval(%q) = %v, want 5m", input, d)
 		}
-	}`
-
-	if err := os.WriteFile(configPath, []byte(configContent), 0644); err != nil {
-		t.Fatalf("Failed to write temp config: %v", err)
-	}
-
-	cfg, err := Load(configPath)
-	if err != nil {
-		t.Fatalf("Failed to load config: %v", err)
-	}
-
-	if !cfg.Ollama.Enabled {
-		t.Error("Expected Ollama.Enabled true")
-	}
-	if len(cfg.Ollama.Groups) != 2 {
-		t.Errorf("Expected 2 groups, got %d", len(cfg.Ollama.Groups))
-	}
-	if cfg.Ollama.Groups[0].Name != "lan" {
-		t.Errorf("Expected first group name 'lan', got %s", cfg.Ollama.Groups[0].Name)
-	}
-	if len(cfg.Ollama.Groups[0].CIDRs) != 2 {
-		t.Errorf("Expected 2 CIDRs for lan, got %d", len(cfg.Ollama.Groups[0].CIDRs))
 	}
 }

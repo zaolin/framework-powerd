@@ -67,3 +67,18 @@ def test_config_flow_has_notify_service():
     with open(path, 'r') as f:
         source = f.read()
     assert 'CONF_NOTIFY_SERVICE' in source
+
+def test_entity_syntax():
+    """Test entity.py has valid Python syntax."""
+    path = os.path.join(os.path.dirname(__file__), '..', 'entity.py')
+    with open(path, 'r') as f:
+        source = f.read()
+    ast.parse(source)
+
+
+def test_diagnostics_syntax():
+    """Test diagnostics.py has valid Python syntax."""
+    path = os.path.join(os.path.dirname(__file__), '..', 'diagnostics.py')
+    with open(path, 'r') as f:
+        source = f.read()
+    ast.parse(source)

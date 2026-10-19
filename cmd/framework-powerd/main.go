@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -13,6 +14,7 @@ import (
 	"time"
 
 	"github.com/alecthomas/kong"
+	"github.com/coreos/go-systemd/v22/daemon"
 	"github.com/golang-jwt/jwt/v5"
 
 	"github.com/zaolin/framework-powerd/internal/api"
@@ -20,22 +22,26 @@ import (
 	"github.com/zaolin/framework-powerd/internal/detector"
 	"github.com/zaolin/framework-powerd/internal/gpu"
 	"github.com/zaolin/framework-powerd/internal/monitor"
-	"github.com/zaolin/framework-powerd/internal/ollama"
 	"github.com/zaolin/framework-powerd/internal/peripherals"
 	"github.com/zaolin/framework-powerd/internal/power"
 	"github.com/zaolin/framework-powerd/internal/smartd"
 	"github.com/zaolin/framework-powerd/internal/sysinfo"
 )
 
+// version is injected at build time via -ldflags "-X main.version=...".
+var version = "dev"
+
 var CLI struct {
+	Version kong.VersionFlag `name:"version" help:"Print version and exit"`
+
 	Serve struct {
-		Config       string        `help:"Path to config file" type:"path" name:"config" short:"c"`
-		Port         int           `help:"Port to listen on" default:"8080"`
-		Address      string        `help:"Address to listen on" default:"localhost"`
-		JWTSecret    string        `help:"Secret key for JWT authentication" env:"JWT_SECRET" name:"jwt-secret"`
-		DisableAuth  bool           `help:"Disable JWT authentication (INSECURE — exposes control plane without auth)" name:"disable-auth"`
-		Debug        bool          `help:"Enable verbose logging" short:"d"`
-		IdleTimeout  time.Duration `help:"Time before entering idle mode" default:"5m"`
+		Config      string         `help:"Path to config file" type:"path" name:"config" short:"c"`
+		Port        *int           `help:"Port to listen on (default: 8080)"`
+		Address     *string        `help:"Address to listen on (default: localhost)"`
+		JWTSecret   string         `help:"Secret key for JWT authentication" env:"JWT_SECRET" name:"jwt-secret"`
+		DisableAuth bool           `help:"Disable JWT authentication (INSECURE — exposes control plane without auth)" name:"disable-auth"`
+		Debug       bool           `help:"Enable verbose logging" short:"d"`
+		IdleTimeout *time.Duration `help:"Time before entering idle mode (default: config value or 5m)"`
 	} `cmd:"" help:"Start the power daemon"`
 
 	Token struct {
@@ -47,7 +53,7 @@ func main() {
 	// Disable timestamps in logging as systemd/journald handles them
 	log.SetFlags(0)
 
-	ctx := kong.Parse(&CLI)
+	ctx := kong.Parse(&CLI, kong.Vars{"version": version})
 
 	switch ctx.Command() {
 	case "serve":
@@ -61,11 +67,6 @@ func main() {
 
 func generateToken() {
 	token := jwt.New(jwt.SigningMethodHS256)
-	// You might want to add claims like "exp" here, but for a simple daemon maybe indefinite or long lived?
-	// Let's add a reasonable default expiration (e.g., 1 year) or make it optional.
-	// For "how to use it", simpler is better.
-
-	// Create a map to store our claims
 	claims := token.Claims.(jwt.MapClaims)
 	claims["authorized"] = true
 	claims["exp"] = time.Now().Add(time.Hour * 24 * 365).Unix() // 1 year
@@ -79,6 +80,24 @@ func generateToken() {
 	fmt.Println(tokenString)
 }
 
+// applyCLIOverrides applies explicitly provided CLI flags on top of the
+// configuration loaded from disk. Pointer flags remain nil when the user did
+// not pass them, so a config value is only replaced on an explicit flag.
+func applyCLIOverrides(cfg *config.Config) {
+	if CLI.Serve.Address != nil {
+		cfg.Server.Address = *CLI.Serve.Address
+	}
+	if CLI.Serve.Port != nil {
+		cfg.Server.Port = *CLI.Serve.Port
+	}
+	if CLI.Serve.JWTSecret != "" {
+		cfg.Server.JWTSecret = CLI.Serve.JWTSecret
+	}
+	if CLI.Serve.IdleTimeout != nil {
+		cfg.Server.IdleTimeout = CLI.Serve.IdleTimeout.String()
+	}
+}
+
 func runServer() {
 	// Load configuration
 	cfg, err := config.Load(CLI.Serve.Config)
@@ -86,19 +105,19 @@ func runServer() {
 		log.Fatalf("Failed to load config: %v", err)
 	}
 
-	// CLI flags override config file
-	if CLI.Serve.Address != "localhost" {
-		cfg.Server.Address = CLI.Serve.Address
+	// CLI flags override config file values. The flags are pointers so we can
+	// tell "not provided" (nil) apart from an explicit value, including an
+	// explicit value that happens to equal the default.
+	applyCLIOverrides(cfg)
+
+	if err := cfg.Server.Validate(); err != nil {
+		log.Fatalf("Invalid configuration: %v", err)
 	}
-	if CLI.Serve.Port != 8080 {
-		cfg.Server.Port = CLI.Serve.Port
+	if err := cfg.Metrics.Validate(); err != nil {
+		log.Fatalf("Invalid configuration: %v", err)
 	}
-	if CLI.Serve.JWTSecret != "" {
-		cfg.Server.JWTSecret = CLI.Serve.JWTSecret
-	}
-	if CLI.Serve.IdleTimeout != 5*time.Minute {
-		cfg.Server.IdleTimeout = CLI.Serve.IdleTimeout.String()
-	}
+
+	sysinfo.DaemonVersion = version
 
 	// S2: Fail-closed auth. The daemon controls power profiles and process
 	// SIGSTOP/SIGCONT — its API is a control plane. Require an explicit opt-in
@@ -113,13 +132,14 @@ func runServer() {
 	}
 
 	pm := power.NewPowerManager()
+	pm.Debug = CLI.Serve.Debug
 
 	if err := pm.ValidateTools(); err != nil {
 		log.Fatalf("Dependencies missing: %v", err)
 	}
 
 	// Initial Default State
-	log.Println("Starting Framework Power Daemon...")
+	log.Printf("Starting Framework Power Daemon %s...", version)
 	if err := pm.SetDefaultActive(); err != nil {
 		log.Printf("Initial detection failed: %v\n", err)
 	}
@@ -127,13 +147,31 @@ func runServer() {
 	// Components
 	pauser := power.NewProcessPauser()
 
+	// Never leave a game frozen when the daemon exits. This covers both the
+	// graceful shutdown path and early returns.
+	defer func() {
+		if pauser.IsPaused() {
+			log.Println("Releasing paused game processes before exit...")
+			if err := pauser.Resume(); err != nil {
+				log.Printf("Failed to resume game on shutdown: %v", err)
+			}
+		}
+	}()
+
 	// Guarded shared state. Written from multiple goroutines
 	// (idle monitor, remote-play detector, steam detector, API handler)
 	// and read in updatePowerState. All access goes through the lock.
 	state := &daemonState{}
 
+	// Serialize reconciliations: idle, remote-play, steam and API callbacks
+	// must not interleave SetPerformance/SetPowersave or pause/resume.
+	var reconcileMu sync.Mutex
+
 	// Logic handler
 	updatePowerState := func() {
+		reconcileMu.Lock()
+		defer reconcileMu.Unlock()
+
 		st := state.snapshot()
 		d := decidePowerMode(st, pauser.IsPaused())
 
@@ -174,8 +212,10 @@ func runServer() {
 	}
 
 	// Start Idle Monitor (Raw Input)
-	idleMon := monitor.NewIdleMonitor(CLI.Serve.IdleTimeout, CLI.Serve.Debug)
+	idleTimeout := cfg.Server.GetIdleTimeout()
+	idleMon := monitor.NewIdleMonitor(idleTimeout, CLI.Serve.Debug)
 	pm.SetIdleMonitor(idleMon)
+	log.Printf("Idle timeout: %s", idleTimeout)
 
 	idleCtx, idleCancel := context.WithCancel(context.Background())
 	defer idleCancel()
@@ -284,25 +324,25 @@ func runServer() {
 	// reported "balanced" profile — see CurrentTunableState.
 	powerMon.SetModeProvider(pm.CurrentTunableState)
 
+	// Restore aggregated energy metrics before monitoring starts.
+	if cfg.Metrics.Persist {
+		powerMon.SetStatePath(cfg.Metrics.StateFile)
+		powerMon.SetSaveInterval(cfg.Metrics.GetSaveInterval())
+		if restored, err := powerMon.LoadState(); err != nil {
+			log.Printf("[PowerMonitor] Could not restore metrics state: %v", err)
+		} else if restored {
+			log.Println("[PowerMonitor] Restored aggregated energy metrics.")
+		}
+	} else {
+		powerMon.SetStatePath("")
+	}
+
 	pwrCtx, pwrCancel := context.WithCancel(context.Background())
 	defer pwrCancel()
 
 	// Run turbostat in background
 	go powerMon.Start(pwrCtx)
-
-	// Start Ollama Monitor (if enabled)
-	var ollamaMonitor *ollama.Monitor
-	if cfg.Ollama.Enabled {
-		log.Println("Ollama monitoring enabled")
-		ollamaMonitor = ollama.NewMonitor(pm, powerMon, cfg.Ollama, cfg.Pricing)
-		ollamaCtx, ollamaCancel := context.WithCancel(context.Background())
-		defer ollamaCancel()
-		go func() {
-			if err := ollamaMonitor.Start(ollamaCtx); err != nil && ollamaCtx.Err() == nil {
-				log.Printf("Ollama monitor error: %v", err)
-			}
-		}()
-	}
+	powerMon.StartPersistence(pwrCtx)
 
 	// Start Smartd Monitor (if enabled)
 	var smartdMonitor *smartd.Monitor
@@ -349,7 +389,7 @@ func runServer() {
 	// Collect static system info once at startup.
 	sysInfo := sysinfo.Collect()
 
-	apiServer := api.NewServer(pm, powerMon, jwtSecret, ollamaMonitor, smartdMonitor, gpuMonitor, sysInfo)
+	apiServer := api.NewServer(pm, powerMon, jwtSecret, smartdMonitor, gpuMonitor, sysInfo)
 
 	mux := http.NewServeMux()
 
@@ -357,8 +397,7 @@ func runServer() {
 	modeHandler := apiServer.AuthMiddleware(apiServer.RateLimit(apiServer.HandleMode))
 	activityHandler := apiServer.AuthMiddleware(apiServer.RateLimit(apiServer.HandleActivity))
 	statusHandler := apiServer.AuthMiddleware(apiServer.HandleStatus)
-	statsHandler := apiServer.AuthMiddleware(apiServer.HandleOllamaStats)
-	smartdHandler := apiServer.AuthMiddleware(apiServer.HandleSmartdStats)
+	statsHandler := apiServer.AuthMiddleware(apiServer.HandleSmartdStats)
 
 	// When auth is disabled (--disable-auth), AuthMiddleware passes through.
 	if authEnabled {
@@ -367,11 +406,13 @@ func runServer() {
 		log.Println("WARNING: Authentication disabled. API is unauthenticated.")
 	}
 
+	// /healthz is intentionally unauthenticated and read-only: it exposes no
+	// control plane and is safe for systemd/monitoring probes.
+	mux.HandleFunc("/healthz", apiServer.HandleHealth)
 	mux.HandleFunc("/mode", modeHandler)
 	mux.HandleFunc("/status", statusHandler)
 	mux.HandleFunc("/activity", activityHandler)
-	mux.HandleFunc("/ollama/stats", statsHandler)
-	mux.HandleFunc("/smartd/stats", smartdHandler)
+	mux.HandleFunc("/smartd/stats", statsHandler)
 	// S8: 404 catch-all for unmatched paths.
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
@@ -387,15 +428,43 @@ func runServer() {
 		IdleTimeout:       60 * time.Second,
 	}
 
-	// R2+R3: Graceful shutdown. Run the server in a goroutine; on signal,
-	// call srv.Shutdown with a bounded timeout instead of log.Fatalf.
+	// Bind explicitly so startup errors are reported before READY=1.
+	ln, err := net.Listen("tcp", addr)
+	if err != nil {
+		log.Fatalf("Failed to listen on %s: %v", addr, err)
+	}
+
 	serverErr := make(chan error, 1)
 	go func() {
 		log.Printf("Listening on %s...\n", addr)
-		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+		if err := srv.Serve(ln); err != nil && err != http.ErrServerClosed {
 			serverErr <- err
 		}
 	}()
+
+	// Tell systemd we are ready. No-op when not running under systemd.
+	if sent, err := daemon.SdNotify(false, daemon.SdNotifyReady); err != nil {
+		log.Printf("sd_notify READY failed: %v", err)
+	} else if sent {
+		log.Println("Notified systemd: READY=1")
+	}
+
+	// Watchdog pings. No-op when WatchdogSec is not configured.
+	shutdownStarted := make(chan struct{})
+	if wd, err := daemon.SdWatchdogEnabled(false); err == nil && wd > 0 {
+		go func() {
+			ticker := time.NewTicker(wd / 2)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-shutdownStarted:
+					return
+				case <-ticker.C:
+					_, _ = daemon.SdNotify(false, daemon.SdNotifyWatchdog)
+				}
+			}
+		}()
+	}
 
 	stop := make(chan os.Signal, 1)
 	signal.Notify(stop, syscall.SIGINT, syscall.SIGTERM)
@@ -405,6 +474,15 @@ func runServer() {
 		log.Printf("HTTP server error: %v", err)
 	case <-stop:
 		log.Println("Shutting down...")
+	}
+
+	close(shutdownStarted)
+	_, _ = daemon.SdNotify(false, daemon.SdNotifyStopping)
+
+	// Stop producing new power samples, then flush the final metrics state.
+	pwrCancel()
+	if err := powerMon.SaveState(); err != nil {
+		log.Printf("Failed to save metrics state on shutdown: %v", err)
 	}
 
 	// Give the HTTP server up to 5 seconds to finish in-flight requests.
@@ -446,19 +524,24 @@ func (s *daemonState) snapshot() stateSnapshot {
 	}
 }
 
-func (s *daemonState) setIdle(v bool)         { s.mu.Lock(); s.isIdle = v; s.mu.Unlock() }
-func (s *daemonState) setRemotePlay(v bool)   { s.mu.Lock(); s.isRemotePlay = v; s.mu.Unlock() }
-func (s *daemonState) setGame(pid int)        { s.mu.Lock(); s.isGameRunning = pid > 0; s.gamePID = pid; s.mu.Unlock() }
+func (s *daemonState) setIdle(v bool)       { s.mu.Lock(); s.isIdle = v; s.mu.Unlock() }
+func (s *daemonState) setRemotePlay(v bool) { s.mu.Lock(); s.isRemotePlay = v; s.mu.Unlock() }
+func (s *daemonState) setGame(pid int) {
+	s.mu.Lock()
+	s.isGameRunning = pid > 0
+	s.gamePID = pid
+	s.mu.Unlock()
+}
 
 // powerDecision is the outcome of the state machine priority table.
 // It tells the caller what actions to take, not how to take them — so the
 // decision logic can be table-tested without real PowerManager/Pauser.
 type powerDecision struct {
-	shouldIdle     bool
-	shouldPause    bool
-	shouldResume   bool
-	shouldPerf     bool
-	shouldDefault  bool
+	shouldIdle    bool
+	shouldPause   bool
+	shouldResume  bool
+	shouldPerf    bool
+	shouldDefault bool
 }
 
 // decidePowerMode encodes the 4-branch priority table extracted from

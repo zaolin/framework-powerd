@@ -76,111 +76,6 @@ class TestSmartdDeviceSensor:
         assert attrs["alerts"][0]["device"] == "/dev/sda"
 
 
-class TestOllamaModelsSensor:
-    """Test OllamaModelsSensor — shows model count + structured per-model details."""
-
-    def test_native_value_returns_count(self, mock_coordinator):
-        """native_value should return the number of loaded models."""
-        from custom_components.framework_powerd.sensor import OllamaModelsSensor
-
-        sensor = OllamaModelsSensor(mock_coordinator)
-        assert sensor.native_value == 1  # conftest has 1 model
-
-    def test_native_value_no_models(self, mock_coordinator):
-        """native_value should return 0 when no models loaded."""
-        from custom_components.framework_powerd.sensor import OllamaModelsSensor
-
-        mock_coordinator.data["ollama"]["models"] = []
-        sensor = OllamaModelsSensor(mock_coordinator)
-        assert sensor.native_value == 0
-
-    def test_extra_state_attributes_contains_model_details(self, mock_coordinator):
-        """extra_state_attributes should contain per-model detail dicts."""
-        from custom_components.framework_powerd.sensor import OllamaModelsSensor
-
-        sensor = OllamaModelsSensor(mock_coordinator)
-        attrs = sensor.extra_state_attributes
-
-        assert "models" in attrs
-        assert len(attrs["models"]) == 1
-        model = attrs["models"][0]
-        assert model["name"] == "llama3:8b"
-        assert model["family"] == "llama"
-        assert model["parameter_size"] == "8.0B"
-        assert model["quantization_level"] == "Q4_K_M"
-        assert model["vram_gib"] == round(4000000000 / (1024**3), 2)
-        assert model["context_length"] == 8192
-
-    def test_unique_id(self, mock_coordinator):
-        from custom_components.framework_powerd.sensor import OllamaModelsSensor
-
-        sensor = OllamaModelsSensor(mock_coordinator)
-        assert sensor._attr_unique_id == "ollama_models"
-
-
-class TestOllamaTotalRequestsSensor:
-    """Test OllamaTotalRequestsSensor — sums all group + ungrouped requests."""
-
-    def test_native_value_sums_groups_and_ungrouped(self, mock_coordinator):
-        """Should sum by_group counts + ungrouped count."""
-        from custom_components.framework_powerd.sensor import OllamaTotalRequestsSensor
-
-        mock_coordinator.data["ollama"]["by_group"] = {
-            "lan": {"count": 5},
-            "tailscale": {"count": 3},
-        }
-        mock_coordinator.data["ollama"]["ungrouped"] = {"count": 2}
-
-        sensor = OllamaTotalRequestsSensor(mock_coordinator)
-        assert sensor.native_value == 10  # 5 + 3 + 2
-
-    def test_native_value_no_data(self, mock_coordinator):
-        """Should return 0 when no requests recorded."""
-        from custom_components.framework_powerd.sensor import OllamaTotalRequestsSensor
-
-        sensor = OllamaTotalRequestsSensor(mock_coordinator)
-        assert sensor.native_value == 0
-
-    def test_native_value_only_ungrouped(self, mock_coordinator):
-        """Should handle only ungrouped (no by_group)."""
-        from custom_components.framework_powerd.sensor import OllamaTotalRequestsSensor
-
-        mock_coordinator.data["ollama"]["by_group"] = {}
-        mock_coordinator.data["ollama"]["ungrouped"] = {"count": 7}
-
-        sensor = OllamaTotalRequestsSensor(mock_coordinator)
-        assert sensor.native_value == 7
-
-    def test_unique_id(self, mock_coordinator):
-        from custom_components.framework_powerd.sensor import OllamaTotalRequestsSensor
-
-        sensor = OllamaTotalRequestsSensor(mock_coordinator)
-        assert sensor._attr_unique_id == "ollama_total_requests"
-
-
-class TestOllamaVersionSensor:
-    """Test OllamaVersionSensor."""
-
-    def test_native_value(self, mock_coordinator):
-        from custom_components.framework_powerd.sensor import OllamaVersionSensor
-
-        sensor = OllamaVersionSensor(mock_coordinator)
-        assert sensor.native_value == "0.23.0"
-
-    def test_native_value_unknown(self, mock_coordinator):
-        from custom_components.framework_powerd.sensor import OllamaVersionSensor
-
-        mock_coordinator.data["ollama"]["ollama_version"] = "Unknown"
-        sensor = OllamaVersionSensor(mock_coordinator)
-        assert sensor.native_value == "Unknown"
-
-    def test_unique_id(self, mock_coordinator):
-        from custom_components.framework_powerd.sensor import OllamaVersionSensor
-
-        sensor = OllamaVersionSensor(mock_coordinator)
-        assert sensor._attr_unique_id == "ollama_version"
-
-
 class TestSystemInfoSensors:
     """Test system info sensors (kernel, OS, CPU, RAM, daemon version)."""
 
@@ -221,7 +116,7 @@ class TestSystemInfoSensors:
         from custom_components.framework_powerd.sensor import DaemonVersionSensor
 
         sensor = DaemonVersionSensor(mock_coordinator)
-        assert sensor.native_value == "1.2.0"
+        assert sensor.native_value == "1.3.0"
 
     def test_kernel_version_unique_id(self, mock_coordinator):
         from custom_components.framework_powerd.sensor import KernelVersionSensor
@@ -276,47 +171,32 @@ class TestPeripheralPowerSensor:
         assert sensor._attr_unique_id == "power_peripheral"
 
 
-class TestSystemVRAMUsedSensor:
-    """Test SystemVRAMUsedSensor — GPU VRAM minus Ollama VRAM."""
+class TestLifetimeEnergySensor:
+    """Test LifetimeEnergySensor — persisted total energy counter."""
 
     def test_native_value(self, mock_coordinator):
-        """System VRAM = GPU VRAM used - Ollama loaded VRAM."""
-        from custom_components.framework_powerd.sensor import SystemVRAMUsedSensor
+        from custom_components.framework_powerd.sensor import LifetimeEnergySensor
 
-        # conftest: gpu vram_used_bytes = 2.78 GiB, ollama loaded_vram_bytes = 0
-        # system_vram = 2.78 - 0 = 2.78 GiB
-        sensor = SystemVRAMUsedSensor(mock_coordinator)
-        gpu_vram = mock_coordinator.data.get("gpu", {}).get("vram_used_bytes", 0)
-        ollama_vram = mock_coordinator.data.get("ollama", {}).get("loaded_vram_bytes", 0)
-        expected = round(max(gpu_vram - ollama_vram, 0) / (1024**3), 2)
-        assert sensor.native_value == expected
+        sensor = LifetimeEnergySensor(mock_coordinator)
+        assert sensor.native_value == 42.125
 
-    def test_native_value_with_ollama_loaded(self, mock_coordinator):
-        """When Ollama has models loaded, system VRAM should be the remainder."""
-        from custom_components.framework_powerd.sensor import SystemVRAMUsedSensor
+    def test_native_value_missing(self, mock_coordinator):
+        from custom_components.framework_powerd.sensor import LifetimeEnergySensor
 
-        # Set GPU VRAM to 37.57 GiB, Ollama to 31.91 GiB
-        mock_coordinator.data["gpu"]["vram_used_bytes"] = int(37.57 * (1024**3))
-        mock_coordinator.data["ollama"]["loaded_vram_bytes"] = int(31.91 * (1024**3))
-        sensor = SystemVRAMUsedSensor(mock_coordinator)
-        # system_vram = 37.57 - 31.91 = 5.66 GiB (approximately)
-        assert 5.5 < sensor.native_value < 5.8
+        del mock_coordinator.data["power"]["lifetime_energy_kwh"]
+        sensor = LifetimeEnergySensor(mock_coordinator)
+        assert sensor.native_value == 0
 
-    def test_native_value_no_ollama(self, mock_coordinator):
-        """When no Ollama data, system VRAM should equal GPU VRAM."""
-        from custom_components.framework_powerd.sensor import SystemVRAMUsedSensor
+    def test_unique_id_and_unit(self, mock_coordinator):
+        from custom_components.framework_powerd.sensor import LifetimeEnergySensor
+        from homeassistant.components.sensor import SensorDeviceClass, SensorStateClass
+        from homeassistant.const import UnitOfEnergy
 
-        mock_coordinator.data["ollama"] = {}
-        sensor = SystemVRAMUsedSensor(mock_coordinator)
-        gpu_vram = mock_coordinator.data.get("gpu", {}).get("vram_used_bytes", 0)
-        expected = round(gpu_vram / (1024**3), 2)
-        assert sensor.native_value == expected
-
-    def test_unique_id(self, mock_coordinator):
-        from custom_components.framework_powerd.sensor import SystemVRAMUsedSensor
-
-        sensor = SystemVRAMUsedSensor(mock_coordinator)
-        assert sensor._attr_unique_id == "system_vram_used"
+        sensor = LifetimeEnergySensor(mock_coordinator)
+        assert sensor._attr_unique_id == "energy_total"
+        assert sensor._attr_device_class == SensorDeviceClass.ENERGY
+        assert sensor._attr_state_class == SensorStateClass.TOTAL_INCREASING
+        assert sensor._attr_native_unit_of_measurement == UnitOfEnergy.KILO_WATT_HOUR
 
 
 class TestPowerModeSensor:
@@ -419,3 +299,144 @@ class TestUptimeSensor:
         sensor = UptimeSensor(mock_coordinator)
         assert sensor._attr_device_class == SensorDeviceClass.DURATION
         assert sensor._attr_native_unit_of_measurement == UnitOfTime.SECONDS
+
+
+class TestRAMMemorySensors:
+    """Test RAM used/free/available/usage sensors."""
+
+    def test_ram_used(self, mock_coordinator):
+        from custom_components.framework_powerd.sensor import RAMUsedSensor
+
+        sensor = RAMUsedSensor(mock_coordinator)
+        expected = round(mock_coordinator.data["memory"]["used_bytes"] / (1024**3), 2)
+        assert sensor.native_value == expected
+
+    def test_ram_free(self, mock_coordinator):
+        from custom_components.framework_powerd.sensor import RAMFreeSensor
+
+        sensor = RAMFreeSensor(mock_coordinator)
+        assert sensor.native_value == 8.0
+
+    def test_ram_available(self, mock_coordinator):
+        from custom_components.framework_powerd.sensor import RAMAvailableSensor
+
+        sensor = RAMAvailableSensor(mock_coordinator)
+        assert sensor.native_value == 20.0
+
+    def test_ram_usage(self, mock_coordinator):
+        from custom_components.framework_powerd.sensor import RAMUsageSensor
+
+        sensor = RAMUsageSensor(mock_coordinator)
+        expected = round(
+            mock_coordinator.data["memory"]["used_percent"], 1
+        )
+        assert sensor.native_value == expected
+
+    def test_missing_memory_returns_zero(self, mock_coordinator):
+        from custom_components.framework_powerd.sensor import RAMUsedSensor, RAMUsageSensor
+
+        del mock_coordinator.data["memory"]
+        assert RAMUsedSensor(mock_coordinator).native_value == 0
+        assert RAMUsageSensor(mock_coordinator).native_value == 0
+
+    def test_unique_ids_and_units(self, mock_coordinator):
+        from homeassistant.const import UnitOfInformation
+
+        from custom_components.framework_powerd.sensor import (
+            RAMAvailableSensor,
+            RAMFreeSensor,
+            RAMUsageSensor,
+            RAMUsedSensor,
+        )
+
+        assert RAMUsedSensor(mock_coordinator)._attr_unique_id == "ram_used"
+        assert RAMFreeSensor(mock_coordinator)._attr_unique_id == "ram_free"
+        assert RAMAvailableSensor(mock_coordinator)._attr_unique_id == "ram_available"
+        assert RAMUsageSensor(mock_coordinator)._attr_unique_id == "ram_usage"
+        assert RAMUsedSensor(mock_coordinator)._attr_native_unit_of_measurement == UnitOfInformation.GIBIBYTES
+        assert RAMUsageSensor(mock_coordinator)._attr_native_unit_of_measurement == "%"
+
+
+class TestGPUVRAMDerivedSensors:
+    """Test VRAM free and usage sensors."""
+
+    def test_vram_free(self, mock_coordinator):
+        from custom_components.framework_powerd.sensor import GPUVRAMFreeSensor
+
+        sensor = GPUVRAMFreeSensor(mock_coordinator)
+        expected = round(mock_coordinator.data["gpu"]["vram_free_bytes"] / (1024**3), 2)
+        assert sensor.native_value == expected
+
+    def test_vram_free_fallback(self, mock_coordinator):
+        from custom_components.framework_powerd.sensor import GPUVRAMFreeSensor
+
+        del mock_coordinator.data["gpu"]["vram_free_bytes"]
+        sensor = GPUVRAMFreeSensor(mock_coordinator)
+        expected = round(
+            (
+                mock_coordinator.data["gpu"]["vram_total_bytes"]
+                - mock_coordinator.data["gpu"]["vram_used_bytes"]
+            )
+            / (1024**3),
+            2,
+        )
+        assert sensor.native_value == expected
+
+    def test_vram_usage(self, mock_coordinator):
+        from custom_components.framework_powerd.sensor import GPUVRAMUsageSensor
+
+        sensor = GPUVRAMUsageSensor(mock_coordinator)
+        expected = round(mock_coordinator.data["gpu"]["vram_used_percent"], 1)
+        assert sensor.native_value == expected
+
+    def test_vram_usage_fallback(self, mock_coordinator):
+        from custom_components.framework_powerd.sensor import GPUVRAMUsageSensor
+
+        del mock_coordinator.data["gpu"]["vram_used_percent"]
+        sensor = GPUVRAMUsageSensor(mock_coordinator)
+        gpu = mock_coordinator.data["gpu"]
+        expected = round(gpu["vram_used_bytes"] / gpu["vram_total_bytes"] * 100, 1)
+        assert sensor.native_value == expected
+
+
+class TestGPUTTGSensors:
+    """Test GTT total/free/usage sensors."""
+
+    def test_gtt_total(self, mock_coordinator):
+        from custom_components.framework_powerd.sensor import GPUTTGTotalSensor
+
+        sensor = GPUTTGTotalSensor(mock_coordinator)
+        expected = round(mock_coordinator.data["gpu"]["gtt_total_bytes"] / (1024**2), 2)
+        assert sensor.native_value == expected
+
+    def test_gtt_free(self, mock_coordinator):
+        from custom_components.framework_powerd.sensor import GPUTTGFreeSensor
+
+        sensor = GPUTTGFreeSensor(mock_coordinator)
+        expected = round(mock_coordinator.data["gpu"]["gtt_free_bytes"] / (1024**2), 2)
+        assert sensor.native_value == expected
+
+    def test_gtt_free_fallback(self, mock_coordinator):
+        from custom_components.framework_powerd.sensor import GPUTTGFreeSensor
+
+        del mock_coordinator.data["gpu"]["gtt_free_bytes"]
+        sensor = GPUTTGFreeSensor(mock_coordinator)
+        gpu = mock_coordinator.data["gpu"]
+        expected = round((gpu["gtt_total_bytes"] - gpu["gtt_used_bytes"]) / (1024**2), 2)
+        assert sensor.native_value == expected
+
+    def test_gtt_usage(self, mock_coordinator):
+        from custom_components.framework_powerd.sensor import GPUTTGUsageSensor
+
+        sensor = GPUTTGUsageSensor(mock_coordinator)
+        expected = round(mock_coordinator.data["gpu"]["gtt_used_percent"], 1)
+        assert sensor.native_value == expected
+
+    def test_gtt_usage_fallback(self, mock_coordinator):
+        from custom_components.framework_powerd.sensor import GPUTTGUsageSensor
+
+        del mock_coordinator.data["gpu"]["gtt_used_percent"]
+        sensor = GPUTTGUsageSensor(mock_coordinator)
+        gpu = mock_coordinator.data["gpu"]
+        expected = round(gpu["gtt_used_bytes"] / gpu["gtt_total_bytes"] * 100, 1)
+        assert sensor.native_value == expected

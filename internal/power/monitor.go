@@ -3,6 +3,7 @@ package power
 import (
 	"bufio"
 	"context"
+	"fmt"
 	"log"
 	"os"
 	"os/exec"
@@ -14,6 +15,10 @@ import (
 	"github.com/zaolin/framework-powerd/internal/peripherals"
 )
 
+// errTurbostatMissing signals the supervisor to stop retrying when the tool is
+// not installed at all.
+var errTurbostatMissing = fmt.Errorf("turbostat not found")
+
 // PowerMetrics holds the current power consumption values in Watts
 type PowerMetrics struct {
 	PkgWatt             float64 `json:"pkg_watt"`
@@ -21,14 +26,15 @@ type PowerMetrics struct {
 	GFXWatt             float64 `json:"gfx_watt"`
 	RAMWatt             float64 `json:"ram_watt"`
 	EstimatedTotalWatts float64 `json:"estimated_total_watts"`
-	PeripheralWatts    float64 `json:"peripheral_watts"`
+	PeripheralWatts     float64 `json:"peripheral_watts"`
 }
 
 // PowerStatus contains the full status response
 type PowerStatus struct {
-	Current      PowerMetrics `json:"current"`
-	Energy24hkWh float64      `json:"energy_24h_kwh"`
-	Energy7dkWh  float64      `json:"energy_7d_kwh"`
+	Current           PowerMetrics `json:"current"`
+	Energy24hkWh      float64      `json:"energy_24h_kwh"`
+	Energy7dkWh       float64      `json:"energy_7d_kwh"`
+	LifetimeEnergyKWh float64      `json:"lifetime_energy_kwh"`
 }
 
 // PowerMonitor handles reading from turbostat and aggregating history
@@ -51,12 +57,34 @@ type PowerMonitor struct {
 	hourlyEnergy [168]float64 // Energy in Joules for each hour window
 	hourIndex    int          // Current index in the ring buffer
 	lastHourTime time.Time    // Timestamp of when the current hour started
+
+	// lifetimeEnergyJoules is a monotonic counter since the first persisted
+	// run. It intentionally survives restarts via the metrics state file.
+	lifetimeEnergyJoules float64
+	lastEnergyTime       time.Time
+	lastSample           time.Time
+
+	// now is injectable for deterministic tests.
+	now func() time.Time
+
+	// Persistence configuration.
+	statePath    string
+	saveInterval time.Duration
+	saveCh       chan struct{}
+	stateMu      sync.Mutex
+	lastSavedAt  time.Time
+	lastSaveErr  error
 }
 
 // NewPowerMonitor creates a new monitor instance
 func NewPowerMonitor() *PowerMonitor {
+	now := time.Now()
 	return &PowerMonitor{
-		lastHourTime: time.Now(),
+		now:            time.Now,
+		lastHourTime:   now,
+		lastEnergyTime: now,
+		saveInterval:   5 * time.Minute,
+		saveCh:         make(chan struct{}, 1),
 	}
 }
 
@@ -78,13 +106,57 @@ func (m *PowerMonitor) SetModeProvider(fn func() string) {
 // Start begins the monitoring loop (CPU)
 func (m *PowerMonitor) Start(ctx context.Context) {
 	// Start CPU Monitoring (Turbostat) - Streamed
-	go m.runTurbostat(ctx)
+	go m.superviseTurbostat(ctx)
 }
 
-func (m *PowerMonitor) runTurbostat(ctx context.Context) {
+// superviseTurbostat keeps turbostat alive. If it exits unexpectedly (for
+// example after a suspend/resume cycle), it is restarted with exponential
+// backoff. A missing binary is not retried.
+func (m *PowerMonitor) superviseTurbostat(ctx context.Context) {
+	const (
+		minBackoff = time.Second
+		maxBackoff = 30 * time.Second
+		stableRun  = time.Minute
+	)
+	backoff := minBackoff
+
+	for {
+		started := m.now()
+		err := m.runTurbostat(ctx)
+		if ctx.Err() != nil {
+			return
+		}
+		if err == errTurbostatMissing {
+			log.Println("[PowerMonitor] turbostat not found. CPU power monitoring disabled.")
+			return
+		}
+
+		// Do not charge the outage between two turbostat runs to the
+		// energy aggregates. The next sample starts a fresh interval.
+		m.mu.Lock()
+		m.lastEnergyTime = m.now()
+		m.mu.Unlock()
+
+		if m.now().Sub(started) >= stableRun {
+			backoff = minBackoff
+		}
+		log.Printf("[PowerMonitor] turbostat stopped (%v); restarting in %s", err, backoff)
+
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(backoff):
+		}
+		backoff *= 2
+		if backoff > maxBackoff {
+			backoff = maxBackoff
+		}
+	}
+}
+
+func (m *PowerMonitor) runTurbostat(ctx context.Context) error {
 	if _, err := exec.LookPath("turbostat"); err != nil {
-		log.Println("[PowerMonitor] turbostat not found. CPU power monitoring disabled.")
-		return
+		return errTurbostatMissing
 	}
 
 	// Command: turbostat --Summary --quiet --show PkgWatt,CorWatt,RAMWatt --interval 1
@@ -92,13 +164,11 @@ func (m *PowerMonitor) runTurbostat(ctx context.Context) {
 
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
-		log.Printf("[PowerMonitor] Failed to create stdout pipe: %v\n", err)
-		return
+		return fmt.Errorf("create stdout pipe: %w", err)
 	}
 
 	if err := cmd.Start(); err != nil {
-		log.Printf("[PowerMonitor] Failed to start turbostat: %v\n", err)
-		return
+		return fmt.Errorf("start turbostat: %w", err)
 	}
 
 	log.Println("[PowerMonitor] Started CPU monitoring (turbostat).")
@@ -126,14 +196,37 @@ func (m *PowerMonitor) runTurbostat(ctx context.Context) {
 		m.updateCPUMetrics(parts, colMap)
 	}
 
-	if err := cmd.Wait(); err != nil && ctx.Err() == nil {
-		log.Printf("[PowerMonitor] turbostat exited unexpectedly: %v\n", err)
+	if err := scanner.Err(); err != nil {
+		return fmt.Errorf("read turbostat output: %w", err)
 	}
+	if err := cmd.Wait(); err != nil {
+		return err
+	}
+	return nil
+}
+
+// advanceHoursLocked rotates the ring buffer forward to the hour containing
+// now. It must be called with m.mu held. It reports whether at least one slot
+// was rotated (i.e. an hour boundary was crossed).
+func (m *PowerMonitor) advanceHoursLocked(now time.Time) bool {
+	rotated := false
+	for now.Sub(m.lastHourTime) >= time.Hour {
+		if now.Sub(m.lastHourTime) >= 168*time.Hour {
+			m.hourlyEnergy = [168]float64{}
+			m.hourIndex = 0
+			m.lastHourTime = now
+			return true
+		}
+		m.hourIndex = (m.hourIndex + 1) % 168
+		m.hourlyEnergy[m.hourIndex] = 0
+		m.lastHourTime = m.lastHourTime.Add(time.Hour)
+		rotated = true
+	}
+	return rotated
 }
 
 func (m *PowerMonitor) updateCPUMetrics(parts []string, colMap map[string]int) {
 	m.mu.Lock()
-	defer m.mu.Unlock()
 
 	parseFloat := func(s string) float64 {
 		f, _ := strconv.ParseFloat(s, 64)
@@ -161,31 +254,50 @@ func (m *PowerMonitor) updateCPUMetrics(parts []string, colMap map[string]int) {
 	// If a peripheral estimator is attached, add the estimated peripheral
 	// power (USB, NVMe, fan, WiFi, Ethernet) and apply VRM correction.
 	// Otherwise, use PkgWatt + RAMWatt as the base.
-	var energyJoules float64
+	var totalWatts float64
 	if m.peripherals != nil && m.modeProvider != nil {
 		mode := m.modeProvider()
 		peripheralWatts := m.peripherals.EstimateWatts(mode)
 		m.current.PeripheralWatts = peripheralWatts
 
 		subtotal := m.current.PkgWatt + peripheralWatts
-		totalWatts := peripherals.ApplyVRMCorrection(subtotal, m.peripherals.VRMLossPercent())
+		totalWatts = peripherals.ApplyVRMCorrection(subtotal, m.peripherals.VRMLossPercent())
 		m.current.EstimatedTotalWatts = totalWatts
-		energyJoules = totalWatts * 1.0
 	} else {
 		// Fallback: PkgWatt + RAMWatt (if available), no peripherals
-		base := m.current.PkgWatt + m.current.RAMWatt
-		m.current.EstimatedTotalWatts = base
+		totalWatts = m.current.PkgWatt + m.current.RAMWatt
+		m.current.EstimatedTotalWatts = totalWatts
 		m.current.PeripheralWatts = 0
-		energyJoules = base * 1.0
 	}
 
-	now := time.Now()
-	if now.Sub(m.lastHourTime) >= time.Hour {
-		m.hourIndex = (m.hourIndex + 1) % 168
-		m.hourlyEnergy[m.hourIndex] = 0
-		m.lastHourTime = now
+	now := m.now()
+
+	// Integrate energy over the real elapsed time instead of assuming a
+	// fixed 1-second turbostat interval. Cap the delta so a suspend/resume
+	// gap cannot inject an implausible energy jump.
+	deltaSeconds := 0.0
+	if !m.lastEnergyTime.IsZero() {
+		deltaSeconds = now.Sub(m.lastEnergyTime).Seconds()
+		if deltaSeconds < 0 {
+			deltaSeconds = 0
+		}
+		if deltaSeconds > 60 {
+			deltaSeconds = 60
+		}
 	}
+	energyJoules := totalWatts * deltaSeconds
+
+	m.lifetimeEnergyJoules += energyJoules
+	m.lastEnergyTime = now
+	m.lastSample = now
+
+	rotated := m.advanceHoursLocked(now)
 	m.hourlyEnergy[m.hourIndex] += energyJoules
+	m.mu.Unlock()
+
+	if rotated {
+		m.RequestSave()
+	}
 }
 
 // GetStatus returns the current power stats
@@ -213,10 +325,22 @@ func (m *PowerMonitor) GetStatus() PowerStatus {
 	conversion := 3600000.0
 
 	return PowerStatus{
-		Current:      m.current,
-		Energy24hkWh: sum24h / conversion,
-		Energy7dkWh:  sum7d / conversion,
+		Current:           m.current,
+		Energy24hkWh:      sum24h / conversion,
+		Energy7dkWh:       sum7d / conversion,
+		LifetimeEnergyKWh: m.lifetimeEnergyJoules / conversion,
 	}
+}
+
+// LastSampleAge returns how long ago turbostat produced its last sample, or a
+// negative duration if no sample has been received yet.
+func (m *PowerMonitor) LastSampleAge() time.Duration {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	if m.lastSample.IsZero() {
+		return -1
+	}
+	return m.now().Sub(m.lastSample)
 }
 
 // GetUptimeSeconds returns the system uptime in seconds

@@ -4,8 +4,10 @@ import (
 	"fmt"
 	"os"
 	"testing"
+	"time"
 
 	"github.com/golang-jwt/jwt/v5"
+	"github.com/zaolin/framework-powerd/internal/config"
 )
 
 // TestDecidePowerMode_Table verifies T4: the 4-branch priority table for
@@ -40,19 +42,19 @@ func TestDecidePowerMode_Table(t *testing.T) {
 			wantIdle: true,
 		},
 		{
-			name:      "active + game running → performance",
-			st:        stateSnapshot{isIdle: false, isGameRunning: true, gamePID: 1234},
-			wantPerf:  true,
+			name:     "active + game running → performance",
+			st:       stateSnapshot{isIdle: false, isGameRunning: true, gamePID: 1234},
+			wantPerf: true,
 		},
 		{
-			name:      "active + remote play → performance",
-			st:        stateSnapshot{isIdle: false, isRemotePlay: true},
-			wantPerf:  true,
+			name:     "active + remote play → performance",
+			st:       stateSnapshot{isIdle: false, isRemotePlay: true},
+			wantPerf: true,
 		},
 		{
-			name:     "active + desktop → default active",
-			st:       stateSnapshot{isIdle: false},
-			wantDef:  true,
+			name:    "active + desktop → default active",
+			st:      stateSnapshot{isIdle: false},
+			wantDef: true,
 		},
 		{
 			name:       "active + game paused → resume + performance",
@@ -200,5 +202,64 @@ func TestGenerateToken(t *testing.T) {
 	}
 	if _, ok := claims["exp"]; !ok {
 		t.Error("token missing exp claim")
+	}
+}
+
+// TestApplyCLIOverrides verifies that config values survive when a flag is
+// absent, and that explicitly provided flags (including ones equal to the old
+// defaults) override the config file.
+func TestApplyCLIOverrides(t *testing.T) {
+	orig := CLI.Serve
+	defer func() { CLI.Serve = orig }()
+
+	// No flags provided: the config file wins.
+	CLI.Serve.Address = nil
+	CLI.Serve.Port = nil
+	CLI.Serve.IdleTimeout = nil
+	CLI.Serve.JWTSecret = ""
+
+	cfg := config.DefaultConfig()
+	cfg.Server.Address = "config-host"
+	cfg.Server.Port = 9999
+	cfg.Server.IdleTimeout = "10m"
+	cfg.Server.JWTSecret = "config-secret"
+
+	applyCLIOverrides(cfg)
+
+	if cfg.Server.Address != "config-host" {
+		t.Errorf("address = %q, want config-host", cfg.Server.Address)
+	}
+	if cfg.Server.Port != 9999 {
+		t.Errorf("port = %d, want 9999", cfg.Server.Port)
+	}
+	if cfg.Server.GetIdleTimeout() != 10*time.Minute {
+		t.Errorf("idle timeout = %v, want 10m", cfg.Server.GetIdleTimeout())
+	}
+	if cfg.Server.JWTSecret != "config-secret" {
+		t.Errorf("jwt secret = %q, want config-secret", cfg.Server.JWTSecret)
+	}
+
+	// Explicit flags override, even when they equal the built-in defaults.
+	address := "localhost"
+	port := 8080
+	idle := 5 * time.Minute
+	CLI.Serve.Address = &address
+	CLI.Serve.Port = &port
+	CLI.Serve.IdleTimeout = &idle
+	CLI.Serve.JWTSecret = "cli-secret"
+
+	applyCLIOverrides(cfg)
+
+	if cfg.Server.Address != "localhost" {
+		t.Errorf("address = %q, want localhost", cfg.Server.Address)
+	}
+	if cfg.Server.Port != 8080 {
+		t.Errorf("port = %d, want 8080", cfg.Server.Port)
+	}
+	if cfg.Server.GetIdleTimeout() != 5*time.Minute {
+		t.Errorf("idle timeout = %v, want 5m", cfg.Server.GetIdleTimeout())
+	}
+	if cfg.Server.JWTSecret != "cli-secret" {
+		t.Errorf("jwt secret = %q, want cli-secret", cfg.Server.JWTSecret)
 	}
 }

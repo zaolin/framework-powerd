@@ -4,8 +4,6 @@ A Go daemon to automatically manage power profiles on the **Framework Desktop**,
 
 > [!IMPORTANT]
 > This daemon is designed for [**Framework Desktop**](https://frame.work/desktop) usage and has been explicitly tested on [**CachyOS**](https://cachyos.org). It keeps the APU in a **balanced** profile with low wake-up latency for the 24/7 AI server, applies performance tunables when gaming (Active or Remote Play), and drastically reduces power consumption during idle operation.
->
-> **Tip for AI/Ollama Users**: When running local LLMs, using `ollama-vulkan` has been observed to save **~20W/h** compared to `ollama-rocm` on this hardware.
 
 ## Features
 
@@ -13,14 +11,26 @@ A Go daemon to automatically manage power profiles on the **Framework Desktop**,
 - **Idle Detection**: Monitors raw input activity (default 5-minute timeout). Support for **Joystick Deadzones** and **Event Deduplication** to prevent drift.
 - **Game Pausing**: Recursively pauses the entire process tree of a Steam game (including Proton/Wine wrappers) when idle. **Syncs state** on startup to prevent conflicts.
 - **Steam Remote Play Detection**: Detects virtual input devices from Remote Play (specifically `js` interfaces) to keep the system active.
-- **Ollama Usage Monitoring**: Tracks API usage per IP/group with cost accounting (energy × €/kWh) via journald log parsing.
-- **Ollama Model Tracking**: Monitors loaded models and VRAM usage via Ollama's `/api/ps` endpoint.
 - **GPU Monitoring**: Tracks AMD GPU metrics via sysfs (VRAM, GTT, temperature, power) and system CPU usage via `/proc/stat`.
 - **SMART Health Monitoring**: Monitors SMART health alerts via smartd journald logs for hard drive failure detection.
+- **Persistent Energy Metrics**: 24h, 7d and lifetime energy aggregates survive daemon restarts (atomic JSON state file).
+- **Health Endpoint**: Unauthenticated `/healthz` with monitor and persistence status for systemd/monitoring probes.
 - **REST API**: Allows manual mode overriding, idle resetting, and usage statistics.
 - **JWT Authentication**: Secure API access with JSON Web Tokens.
 - **Configuration File**: JSON-based daemon configuration.
 - **Systemd Integration**: Runs effectively as a background service.
+
+## Documentation
+
+- [Configuration](docs/configuration.md) — every key, defaults and precedence
+- [REST API](docs/api.md) — endpoints, response schemas and examples
+- [Home Assistant entities](docs/home_assistant.md) — setup, entity table, dashboard example
+- [Architecture](docs/architecture.md) — components, state machine, persistence
+- [Troubleshooting](docs/troubleshooting.md) — tools, permissions, watchdog, HA
+- [Security](docs/security.md) — JWT, network exposure, systemd hardening
+- [Migration to 1.3](docs/migration-1.3.md) — Ollama removal and entity changes
+- [Idle detection](docs/idle_logic.md) — detailed idle-state logic
+- [Changelog](CHANGELOG.md)
 
 ## Architecture & Flow
 
@@ -33,7 +43,6 @@ graph TD
         Steam[Steam Process Check]
         Remote[Virtual Joystick Check]
         Turbo[Turbostat Power Monitor]
-        Ollama[Ollama Log Monitor]
         GPU[GPU Sysfs Monitor]
         SMART[SMARTd Journal Monitor]
         API[User API]
@@ -52,7 +61,6 @@ graph TD
     Steam -->|Game PID| Main
     Remote -->|Virtual Device| Main
     Turbo -->|Power/Energy Stats| Main
-    Ollama -->|Usage/Cost Stats| Main
     GPU -->|GPU Metrics| Main
     SMART -->|Health Alerts| Main
     API -->|Override/Activity| Main
@@ -61,9 +69,9 @@ graph TD
     Main -->|SIGSTOP/SIGCONT| Pauser
     Input -.->|fsnotify| Hotplug[Device Hotplug]
     Hotplug --> Input
-    Ollama -.->|journald| Journal[systemd Journal]
+    Turbo -.->|persist| State[Metrics State File]
     GPU -.->|sysfs| Sysfs[/sys/class/drm]
-    SMART -.->|journald| Journal
+    SMART -.->|journald| Journal[systemd Journal]
 ```
 
 ## Power Monitoring
@@ -75,8 +83,22 @@ The daemon uses `turbostat` to provide accurate, real-time power consumption met
     *   **Package**: Total package power.
     *   **Core**: CPU Core power.
     *   **RAM**: Memory power.
-*   **Total Energy**: Calculated as the **SUM** of `PkgWatt` + `CorWatt` + `RAMWatt` to account for all reported sensors as requested.
-*   **History**: Tracks 24-hour and 7-day rolling energy consumption in **kWh**.
+*   **Total Energy**: Calculated as `PkgWatt` + `RAMWatt`. `CorWatt` is a subset of `PkgWatt` (cores only) and is deliberately not added, to avoid double-counting.
+*   **History**: Tracks 24-hour and 7-day rolling energy consumption in **kWh**, plus a monotonic **lifetime** counter. The aggregates are persisted to `/var/lib/framework-powerd/metrics.json` (atomic writes) and survive daemon restarts; a gap during downtime is not attributed to any hour.
+*   **Integration**: Energy is integrated over the real elapsed time between turbostat samples, capped at 60 seconds so a suspend/resume gap cannot inject an implausible jump. If turbostat exits, it is restarted with exponential backoff.
+
+## Metrics Persistence
+
+The 24h/7d ring buffer and the lifetime energy counter are written atomically to
+`/var/lib/framework-powerd/metrics.json` every `metrics.save_interval`, on every
+hour boundary, and on graceful shutdown. On startup the daemon rotates the ring
+forward by the hours it was down and zeroes the missed slots, so downtime is
+never charged to a request. A state file older than seven days is discarded.
+
+Writes use a temp file, `fsync`, `rename` and a directory `fsync`; a crash or
+power loss cannot leave a truncated JSON file behind. Corrupt or incompatible
+state files are logged and ignored, and the daemon starts with a fresh buffer.
+The systemd unit sets `StateDirectory=framework-powerd` to create the directory.
 
 ## Network Device Stability
 
@@ -144,7 +166,7 @@ The daemon relies on the following tools:
 
 - `powerprofilesctl`: For pinning the balanced system power profile.
 - `turbostat`: For accurate power monitoring (usually part of `linux-tools` or `linux-cpupower`).
-- `libsystemd-dev`: Required for building (Ollama journald integration uses cgo).
+- `libsystemd-dev`: Required for building (SMART journald integration uses cgo).
 - `powertop` (Optional): For auto-tuning power parameters.
 - `scxctl` (Optional): For sched-ext scheduler management (pinned to gaming mode).
 
@@ -192,6 +214,10 @@ Or for NVMe:
     sudo systemctl enable --now framework-powerd
     ```
 
+The unit uses `Type=notify` with a 30-second watchdog: the daemon sends `READY=1`
+after binding the API and pings the watchdog while running. `StateDirectory`
+creates `/var/lib/framework-powerd` for the persisted metrics.
+
 ## Usage
 
 ### CLI Flags
@@ -202,8 +228,11 @@ You can customize the daemon's behavior with flags:
 # Debug mode (verbose logs)
 framework-powerd serve --debug
 
-# Custom Idle Timeout (default 5m)
+# Custom Idle Timeout (overrides server.idle_timeout; default 5m)
 framework-powerd serve --idle-timeout 30s
+
+# Print the build version
+framework-powerd --version
 ```
 
 ### Home Assistant Integration
@@ -223,34 +252,29 @@ This project is compatible with [HACS](https://hacs.xyz/) (Home Assistant Commun
     *   **Port**: `8080` (default).
     *   **JWT Secret**: If you started the daemon with a secret.
 
-**Sensors Provided**:
+**Sensors Provided** (full table in [Home Assistant entities](docs/home_assistant.md)):
 *   **Power Mode**: `balanced` (the APU profile trio is pinned; the mode endpoint still accepts `performance`/`powersave` to switch the secondary tunables)
 *   **System Idle**: `True` / `False`
 *   **Game Status**: PID and Running/Paused state
-*   **Power Usage**: Package, Core, RAM (Watts)
-*   **Energy Consumption**: Last 24h & 7 Days (kWh, Sum of Pkg+Cor+RAM)
+*   **Power Usage**: Estimated total and peripheral power (Watts)
+*   **Energy Consumption**: Last 24h, 7 Days and lifetime total (kWh; persisted across daemon restarts)
+*   **RAM**: Used, Free, Available (GiB) and Usage (%)
 *   **Uptime**: System uptime (duration)
 *   **Polling Interval**: Configurable number entity (seconds)
 *   **GPU Metrics** (if enabled):
     *   GPU Temperature (°C)
     *   GPU Power (Watts)
-    *   GPU VRAM Used/Total (GB)
-    *   GPU GTT Used (MB)
+    *   GPU VRAM Used/Total/Free (GiB) and Usage (%)
+    *   GPU GTT Used/Total/Free (MiB) and Usage (%)
     *   CPU Usage (%)
 *   **SMART Health** (if enabled):
     *   SMART Alert (Binary Sensor)
     *   SMART Alerts Count
-*   **Ollama Per-Group** (if enabled):
-    *   Requests count
-    *   Energy consumption (kWh)
-    *   Cost (€ or configured currency)
-*   **Ollama Models** (if enabled):
-    *   Loaded Models (list of model names)
-    *   Ollama VRAM Usage (GB)
+*   **System Information** (diagnostic): Kernel, OS, CPU model, total RAM, daemon version
 
 ### API Control
 
-Trigger modes manually using the REST API (default port 8080). Both `performance` and `powersave` re-assert the balanced APU profile; they switch only the secondary tunables (ASPM, powertop, USB/audio latency).
+Trigger modes manually using the REST API (default port 8080). Both `performance` and `powersave` re-assert the balanced APU profile; they switch only the secondary tunables (ASPM, powertop, USB/audio latency). The full reference is in [REST API](docs/api.md).
 
 If JWT authentication is enabled, you must export your token first:
 ```bash
@@ -277,16 +301,17 @@ export TOKEN="your_jwt_token_here"
   curl -H "Authorization: Bearer $TOKEN" http://localhost:8080/status
   ```
 
-- **Get Ollama Stats** (if enabled):
-  ```bash
-  curl -H "Authorization: Bearer $TOKEN" http://localhost:8080/ollama/stats
-  # Output: {"by_ip":{...},"by_group":{"lan":{"count":5,"total_cost":0.0012},...}}
-  ```
-
 - **Get SMART Stats** (if enabled):
   ```bash
   curl -H "Authorization: Bearer $TOKEN" http://localhost:8080/smartd/stats
   # Output: {"alerts":[{"device":"/dev/sda","fail_type":"SelfTest",...}]}
+  ```
+
+- **Health Check** (no authentication required):
+  ```bash
+  curl http://localhost:8080/healthz
+  # Output includes status, version, uptime, power sample age, monitor
+  # booleans and the metrics persistence state.
   ```
 
 ### Authentication
@@ -312,7 +337,7 @@ curl -H "Authorization: Bearer $TOKEN" http://localhost:8080/status
 
 ## Configuration
 
-The daemon supports a JSON configuration file. Create `/etc/framework-powerd/config.json`:
+The daemon supports a JSON configuration file. The full reference is in [Configuration](docs/configuration.md). Create `/etc/framework-powerd/config.json`:
 
 ```json
 {
@@ -320,14 +345,6 @@ The daemon supports a JSON configuration file. Create `/etc/framework-powerd/con
     "address": "0.0.0.0",
     "port": 8080,
     "idle_timeout": "5m"
-  },
-  "ollama": {
-    "enabled": true,
-    "service_unit": "ollama.service",
-    "groups": [
-      {"name": "lan", "cidrs": ["192.168.0.0/16"]},
-      {"name": "tailscale", "cidrs": ["100.64.0.0/10"]}
-    ]
   },
   "smartd": {
     "enabled": true,
@@ -339,9 +356,10 @@ The daemon supports a JSON configuration file. Create `/etc/framework-powerd/con
     "enabled": true,
     "poll_interval": "5s"
   },
-  "pricing": {
-    "energy_price_per_kwh": 0.32,
-    "currency": "EUR"
+  "metrics": {
+    "persist": true,
+    "state_file": "/var/lib/framework-powerd/metrics.json",
+    "save_interval": "5m"
   }
 }
 ```
@@ -353,12 +371,14 @@ The daemon supports a JSON configuration file. Create `/etc/framework-powerd/con
 | `server.address` | Address | string | `localhost` | IP to bind to |
 | `server.port` | Port | int | `8080` | HTTP port |
 | `server.idle_timeout` | Idle Timeout | duration | `5m` | Time before idle |
-| `ollama.enabled` | Enabled | bool | `false` | Enable Ollama monitoring |
 | `smartd.enabled` | Enabled | bool | `false` | Enable SMART monitoring |
 | `smartd.notify_service` | Notify Service | string | `""` | HA notify service |
 | `smartd.alert_retention` | Alert Retention | duration | `30s` | How long to keep alerts |
 | `gpu.enabled` | Enabled | bool | `false` | Enable GPU monitoring |
 | `gpu.poll_interval` | Poll Interval | duration | `5s` | GPU polling frequency |
+| `metrics.persist` | Persist | bool | `true` | Persist energy aggregates across restarts |
+| `metrics.state_file` | State File | string | `/var/lib/framework-powerd/metrics.json` | Atomic JSON state path |
+| `metrics.save_interval` | Save Interval | duration | `5m` | Periodic flush interval |
 
 Run with config:
 ```bash
@@ -368,6 +388,7 @@ Run with config:
 CLI flags override config file values:
 - `--address`: The IP address to listen on (default: `localhost`). Use `0.0.0.0` to listen on all interfaces.
 - `--port`: The port to listen on (default: `8080`).
+- `--idle-timeout`: Overrides `server.idle_timeout`.
 
 > **Note**: If you change the port or address, remember to update your API calls accordingly.
 

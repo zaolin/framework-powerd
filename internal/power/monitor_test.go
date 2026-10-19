@@ -44,16 +44,24 @@ func TestUpdateCPUMetrics_PartialFields(t *testing.T) {
 }
 
 // TestUpdateCPUMetrics_EnergyAccumulation verifies the energy accumulation
-// logic: energy_joules = (PkgWatt + RAMWatt) * 1.0 per sample (no
+// logic: energy_joules = (PkgWatt + RAMWatt) × elapsed seconds (no
 // peripherals attached, fallback formula).
 func TestUpdateCPUMetrics_EnergyAccumulation(t *testing.T) {
 	m := NewPowerMonitor()
+	base := time.Now()
+	clock := base
+	m.now = func() time.Time { return clock }
+	m.lastHourTime = base
+	m.lastEnergyTime = base
+
 	colMap := map[string]int{"PkgWatt": 0, "CorWatt": 1, "RAMWatt": 2}
 	// PkgWatt=5.0, CorWatt=3.0 (subset, NOT added), RAMWatt=2.0
 	// Without peripherals, fallback = PkgWatt + RAMWatt = 7W
-	// Two samples → 14J accumulated.
-	m.updateCPUMetrics([]string{"5.0", "3.0", "2.0"}, colMap) // 7W → 7J
-	m.updateCPUMetrics([]string{"5.0", "3.0", "2.0"}, colMap) // 7W → 7J
+	// Two 1-second samples → 14J accumulated.
+	clock = base.Add(1 * time.Second)
+	m.updateCPUMetrics([]string{"5.0", "3.0", "2.0"}, colMap) // 7W × 1s → 7J
+	clock = base.Add(2 * time.Second)
+	m.updateCPUMetrics([]string{"5.0", "3.0", "2.0"}, colMap) // 7W × 1s → 7J
 
 	// The current hour slot should have 14J.
 	// GetStatus converts to kWh: 14J / 3,600,000 = ~0.0000039 kWh.
@@ -65,6 +73,53 @@ func TestUpdateCPUMetrics_EnergyAccumulation(t *testing.T) {
 	expected := 14.0 / 3600000.0
 	if status.Energy24hkWh < expected*0.9 || status.Energy24hkWh > expected*1.1 {
 		t.Errorf("Energy24hkWh = %v, expected ~%v", status.Energy24hkWh, expected)
+	}
+	if status.LifetimeEnergyKWh < expected*0.9 || status.LifetimeEnergyKWh > expected*1.1 {
+		t.Errorf("LifetimeEnergyKWh = %v, expected ~%v", status.LifetimeEnergyKWh, expected)
+	}
+}
+
+// TestUpdateCPUMetrics_EnergyDeltaCapped verifies a long gap (e.g. after
+// suspend) is capped instead of injecting an implausible energy jump.
+func TestUpdateCPUMetrics_EnergyDeltaCapped(t *testing.T) {
+	m := NewPowerMonitor()
+	base := time.Now()
+	clock := base
+	m.now = func() time.Time { return clock }
+	m.lastHourTime = base
+	m.lastEnergyTime = base
+
+	colMap := map[string]int{"PkgWatt": 0}
+	clock = base.Add(10 * time.Minute)
+	m.updateCPUMetrics([]string{"10.0"}, colMap)
+
+	// 10W for at most 60s = 600J.
+	got := m.GetStatus().LifetimeEnergyKWh * 3600000.0
+	if got < 590 || got > 610 {
+		t.Errorf("lifetime energy = %v J, want ~600 J (capped at 60s)", got)
+	}
+}
+
+// TestLastSampleAge verifies the health-reporting sample age.
+func TestLastSampleAge(t *testing.T) {
+	m := NewPowerMonitor()
+	if age := m.LastSampleAge(); age >= 0 {
+		t.Errorf("fresh monitor LastSampleAge = %v, want negative", age)
+	}
+
+	base := time.Now()
+	clock := base
+	m.now = func() time.Time { return clock }
+	m.lastHourTime = base
+	m.lastEnergyTime = base
+	colMap := map[string]int{"PkgWatt": 0}
+
+	clock = base.Add(time.Second)
+	m.updateCPUMetrics([]string{"5.0"}, colMap)
+
+	clock = base.Add(6 * time.Second)
+	if age := m.LastSampleAge(); age != 5*time.Second {
+		t.Errorf("LastSampleAge = %v, want 5s", age)
 	}
 }
 
@@ -204,7 +259,7 @@ func TestUpdateCPUMetrics_MissingColumn(t *testing.T) {
 }
 
 // TestUpdateCPUMetrics_AMDInference verifies that during heavy GPU load
-// (Ollama inference), PkgWatt is high and CorWatt stays low — confirming
+// (local LLM inference), PkgWatt is high and CorWatt stays low — confirming
 // the GPU power is in PkgWatt, not CorWatt.
 func TestUpdateCPUMetrics_AMDInference(t *testing.T) {
 	m := NewPowerMonitor()

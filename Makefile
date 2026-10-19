@@ -2,11 +2,13 @@
 
 BINARY := framework-powerd
 BUILD_DIR := cmd/framework-powerd
+VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
+LDFLAGS := -X main.version=$(VERSION)
 
 all: build
 
 build:
-	go build -o $(BINARY) ./$(BUILD_DIR)
+	go build -ldflags "$(LDFLAGS)" -o $(BINARY) ./$(BUILD_DIR)
 
 test:
 	go test -race ./...

@@ -253,3 +253,30 @@ func TestCalculateCPUUsageFromLine_NotCpuLine(t *testing.T) {
 		t.Errorf("non-cpu line should return 0, got %v", got)
 	}
 }
+
+func TestDeriveUsage(t *testing.T) {
+	tests := []struct {
+		name        string
+		used, total int64
+		wantFree    int64
+		wantPercent float64
+	}{
+		{"normal", 25, 100, 75, 25},
+		{"empty", 0, 100, 100, 0},
+		{"full", 100, 100, 0, 100},
+		{"used exceeds total", 120, 100, 0, 100},
+		{"negative used", -5, 100, 100, 0},
+		{"zero total", 50, 0, 0, 0},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			free, percent := deriveUsage(tc.used, tc.total)
+			if free != tc.wantFree {
+				t.Errorf("free = %d, want %d", free, tc.wantFree)
+			}
+			if percent != tc.wantPercent {
+				t.Errorf("percent = %v, want %v", percent, tc.wantPercent)
+			}
+		})
+	}
+}

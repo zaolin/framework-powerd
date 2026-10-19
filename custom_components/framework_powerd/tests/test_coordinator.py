@@ -61,11 +61,9 @@ class TestFrameworkPowerCoordinator:
         # We can't directly test timedelta without async, but verify structure
         assert hasattr(mock_coordinator, 'update_interval')
 
-    def test_data_includes_ollama(self, mock_coordinator):
-        """Test that coordinator mock data includes ollama."""
-        assert "ollama" in mock_coordinator.data
-        assert "models" in mock_coordinator.data["ollama"]
-        assert "ollama_version" in mock_coordinator.data["ollama"]
+    def test_data_includes_lifetime_energy(self, mock_coordinator):
+        """Test that coordinator data includes the persisted lifetime counter."""
+        assert mock_coordinator.data["power"]["lifetime_energy_kwh"] == 42.125
 
     def test_data_includes_system_info(self, mock_coordinator):
         """Test that coordinator mock data includes system_info."""

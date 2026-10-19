@@ -1,17 +1,41 @@
 [Unit]
 Description=Framework Power Daemon
-After=network.target
+After=network.target power-profiles-daemon.service
+Wants=power-profiles-daemon.service
+StartLimitIntervalSec=60
+StartLimitBurst=5
 
 [Service]
-ExecStart=/usr/local/bin/framework-powerd serve --address=localhost --port=8080
+Type=notify
+ExecStart=/usr/local/bin/framework-powerd serve
 Restart=always
+RestartSec=5s
+WatchdogSec=30s
 # Root user is required for:
 # 1. Accessing /dev/input/* (Idle Detection)
-# 2. Executing powerprofilesctl/ppd
+# 2. Writing power tunables under /sys
+# 3. Executing powerprofilesctl/ppd
 User=root
+# Persisted energy aggregates live in /var/lib/framework-powerd.
+StateDirectory=framework-powerd
 # Adjust if needed
 Environment=PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 # Environment=JWT_SECRET=change_me_to_enable_auth
+
+# Hardening. ProtectKernelTunables must stay off because the daemon writes
+# PCIe ASPM and cpufreq tunables under /sys.
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectHome=yes
+ProtectSystem=full
+ProtectKernelTunables=no
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+RestrictRealtime=yes
+LockPersonality=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
 
 [Install]
 WantedBy=multi-user.target

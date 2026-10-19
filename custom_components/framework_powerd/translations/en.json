@@ -1,0 +1,23 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Framework Power Daemon",
+        "description": "Connect to the Framework Power Daemon REST API.",
+        "data": {
+          "name": "Name",
+          "host": "Host",
+          "port": "Port",
+          "token": "JWT token",
+          "notify_service": "Notify service"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Cannot connect to the daemon. Check host, port and token."
+    },
+    "abort": {
+      "already_configured": "This daemon is already configured."
+    }
+  }
+}

@@ -5,12 +5,13 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"net/http"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/zaolin/framework-powerd/internal/gpu"
-	"github.com/zaolin/framework-powerd/internal/ollama"
 	"github.com/zaolin/framework-powerd/internal/power"
 	"github.com/zaolin/framework-powerd/internal/smartd"
 	"github.com/zaolin/framework-powerd/internal/sysinfo"
@@ -21,6 +22,13 @@ import (
 
 // maxRequestBody limits JSON body size to prevent memory exhaustion (S4).
 const maxRequestBody = 1 << 20 // 1 MiB
+
+// rateBucket tracks a per-client limiter plus when it was last seen so stale
+// buckets can be pruned from memory.
+type rateBucket struct {
+	limiter  *rate.Limiter
+	lastSeen time.Time
+}
 
 // StatusResponse represents the system status
 type StatusResponse struct {
@@ -34,39 +42,68 @@ type StatusResponse struct {
 	Uptime           string                      `json:"uptime"`
 	UptimeSeconds    float64                     `json:"uptime_seconds"`
 	Power            power.PowerStatus           `json:"power"`
+	Memory           sysinfo.MemoryInfo          `json:"memory"`
 	NetworkDevices   []power.NetworkDeviceStatus `json:"network_devices"`
-	Ollama           *ollama.Stats               `json:"ollama,omitempty"`
 	Smartd           *smartd.Stats               `json:"smartd,omitempty"`
 	GPU              *gpu.Stats                  `json:"gpu,omitempty"`
 	SystemInfo       sysinfo.SystemInfo          `json:"system_info"`
+}
+
+// MonitorHealth summarizes the state of the optional background monitors.
+type MonitorHealth struct {
+	Turbostat string `json:"turbostat"` // ok | stale | waiting
+	Smartd    bool   `json:"smartd"`
+	GPU       bool   `json:"gpu"`
+}
+
+// HealthResponse is the unauthenticated /healthz payload.
+type HealthResponse struct {
+	Status                string                  `json:"status"` // ok | degraded
+	Version               string                  `json:"version"`
+	UptimeSeconds         float64                 `json:"uptime_seconds"`
+	IsIdle                bool                    `json:"is_idle"`
+	PowerSampleAgeSeconds float64                 `json:"power_sample_age_seconds"`
+	MemoryUsedPercent     float64                 `json:"memory_used_percent"`
+	Monitors              MonitorHealth           `json:"monitors"`
+	MetricsState          power.PersistenceStatus `json:"metrics_state"`
 }
 
 // Server handles API requests
 type Server struct {
 	pm            *power.PowerManager
 	powerMonitor  *power.PowerMonitor
-	ollamaMonitor *ollama.Monitor
 	smartdMonitor *smartd.Monitor
 	gpuMonitor    *gpu.Monitor
 	jwtSecret     []byte
 	sysInfo       sysinfo.SystemInfo
+	startedAt     time.Time
 
 	// rateLimiter per-client token bucket for /mode and /activity (S9).
 	rateMu      sync.Mutex
-	rateBuckets map[string]*rate.Limiter
+	rateBuckets map[string]*rateBucket
 }
 
 // NewServer creates a new API server
-func NewServer(pm *power.PowerManager, monitor *power.PowerMonitor, jwtSecret string, ollamaMon *ollama.Monitor, smartdMon *smartd.Monitor, gpuMon *gpu.Monitor, sysInfo sysinfo.SystemInfo) *Server {
+func NewServer(pm *power.PowerManager, monitor *power.PowerMonitor, jwtSecret string, smartdMon *smartd.Monitor, gpuMon *gpu.Monitor, sysInfo sysinfo.SystemInfo) *Server {
 	return &Server{
 		pm:            pm,
 		powerMonitor:  monitor,
-		ollamaMonitor: ollamaMon,
 		smartdMonitor: smartdMon,
 		gpuMonitor:    gpuMon,
 		jwtSecret:     []byte(jwtSecret),
 		sysInfo:       sysInfo,
-		rateBuckets:   make(map[string]*rate.Limiter),
+		startedAt:     time.Now(),
+		rateBuckets:   make(map[string]*rateBucket),
+	}
+}
+
+// writeJSON centralizes JSON responses and prevents caching of live state.
+func writeJSON(w http.ResponseWriter, status int, v any) {
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Cache-Control", "no-store")
+	w.WriteHeader(status)
+	if err := json.NewEncoder(w).Encode(v); err != nil {
+		log.Printf("writeJSON: encode failed: %v", err)
 	}
 }
 
@@ -132,13 +169,26 @@ func (s *Server) AuthMiddleware(next http.HandlerFunc) http.HandlerFunc {
 // request/sec with a burst of 5.
 func (s *Server) RateLimit(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		clientIP := r.RemoteAddr
+		clientIP := clientHost(r.RemoteAddr)
+		now := time.Now()
+
 		s.rateMu.Lock()
-		limiter, ok := s.rateBuckets[clientIP]
+		bucket, ok := s.rateBuckets[clientIP]
 		if !ok {
-			limiter = rate.NewLimiter(rate.Limit(1), 5)
-			s.rateBuckets[clientIP] = limiter
+			bucket = &rateBucket{limiter: rate.NewLimiter(rate.Limit(1), 5)}
+			s.rateBuckets[clientIP] = bucket
 		}
+		bucket.lastSeen = now
+		// Prune idle clients so a long-running daemon cannot grow this map
+		// without bound.
+		if len(s.rateBuckets) > 1024 {
+			for ip, b := range s.rateBuckets {
+				if now.Sub(b.lastSeen) > 10*time.Minute {
+					delete(s.rateBuckets, ip)
+				}
+			}
+		}
+		limiter := bucket.limiter
 		s.rateMu.Unlock()
 
 		if !limiter.Allow() {
@@ -147,6 +197,16 @@ func (s *Server) RateLimit(next http.HandlerFunc) http.HandlerFunc {
 		}
 		next(w, r)
 	}
+}
+
+// clientHost strips the ephemeral port from a RemoteAddr. Without this, every
+// new TCP connection would get its own rate-limit bucket, making the limiter
+// ineffective and letting the bucket map grow.
+func clientHost(remoteAddr string) string {
+	if host, _, err := net.SplitHostPort(remoteAddr); err == nil {
+		return host
+	}
+	return remoteAddr
 }
 
 type ModeRequest struct {
@@ -182,15 +242,14 @@ func (s *Server) HandleMode(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		// S12: Log details server-side, return generic message.
 		log.Printf("HandleMode: failed to set mode %q: %v", req.Mode, err)
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusInternalServerError)
-		json.NewEncoder(w).Encode(map[string]string{"error": "Failed to set mode"})
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "Failed to set mode"})
 		return
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(map[string]string{"message": "Mode set successfully", "mode": "balanced"})
+	writeJSON(w, http.StatusOK, map[string]string{
+		"message": "Mode set successfully",
+		"mode":    "balanced",
+	})
 }
 
 func (s *Server) HandleStatus(w http.ResponseWriter, r *http.Request) {
@@ -213,14 +272,11 @@ func (s *Server) HandleStatus(w http.ResponseWriter, r *http.Request) {
 		Uptime:           power.GetUptime(),
 		UptimeSeconds:    power.GetUptimeSeconds(),
 		Power:            s.powerMonitor.GetStatus(),
+		Memory:           sysinfo.CollectMemory(),
 		NetworkDevices:   status.NetworkDevices,
 		SystemInfo:       s.sysInfo,
 	}
 
-	if s.ollamaMonitor != nil {
-		stats := s.ollamaMonitor.GetStats()
-		resp.Ollama = &stats
-	}
 	if s.smartdMonitor != nil {
 		stats := s.smartdMonitor.GetStats()
 		resp.Smartd = &stats
@@ -230,8 +286,55 @@ func (s *Server) HandleStatus(w http.ResponseWriter, r *http.Request) {
 		resp.GPU = &stats
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(resp)
+	writeJSON(w, http.StatusOK, resp)
+}
+
+// HandleHealth reports daemon liveness without exposing any control-plane
+// data. It is registered without auth and is safe for systemd/monitoring
+// probes.
+func (s *Server) HandleHealth(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	age := s.powerMonitor.LastSampleAge()
+	turbostat := "waiting"
+	sampleAge := 0.0
+	if age >= 0 {
+		sampleAge = age.Seconds()
+		if age <= 15*time.Second {
+			turbostat = "ok"
+		} else {
+			turbostat = "stale"
+		}
+	}
+
+	uptime := power.GetUptimeSeconds()
+	memory := sysinfo.CollectMemory()
+	metrics := s.powerMonitor.PersistenceStatus()
+
+	status := "ok"
+	if turbostat == "stale" ||
+		(turbostat == "waiting" && time.Since(s.startedAt) > 30*time.Second) ||
+		metrics.LastError != "" {
+		status = "degraded"
+	}
+
+	writeJSON(w, http.StatusOK, HealthResponse{
+		Status:                status,
+		Version:               s.sysInfo.DaemonVersion,
+		UptimeSeconds:         uptime,
+		IsIdle:                s.pm.GetStatus().IsIdle,
+		PowerSampleAgeSeconds: sampleAge,
+		MemoryUsedPercent:     memory.UsedPercent,
+		Monitors: MonitorHealth{
+			Turbostat: turbostat,
+			Smartd:    s.smartdMonitor != nil,
+			GPU:       s.gpuMonitor != nil,
+		},
+		MetricsState: metrics,
+	})
 }
 
 func (s *Server) HandleActivity(w http.ResponseWriter, r *http.Request) {
@@ -246,24 +349,7 @@ func (s *Server) HandleActivity(w http.ResponseWriter, r *http.Request) {
 
 	s.pm.TriggerActivity()
 
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(map[string]string{"message": "Activity triggered, idle timer reset"})
-}
-
-// HandleOllamaStats returns Ollama usage statistics
-func (s *Server) HandleOllamaStats(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-	if s.ollamaMonitor == nil {
-		http.Error(w, "Ollama monitoring not enabled", http.StatusNotFound)
-		return
-	}
-
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(s.ollamaMonitor.GetStats())
+	writeJSON(w, http.StatusOK, map[string]string{"message": "Activity triggered, idle timer reset"})
 }
 
 // HandleSmartdStats returns SMART health statistics
@@ -277,6 +363,5 @@ func (s *Server) HandleSmartdStats(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(s.smartdMonitor.GetStats())
+	writeJSON(w, http.StatusOK, s.smartdMonitor.GetStats())
 }
