@@ -77,8 +77,13 @@ Only the secondary tunables (PCIe ASPM, powertop, USB/audio latency) change.
   restart resets the energy clock so the outage is not charged to an hour.
 - **GPU monitor** polls sysfs every `gpu.poll_interval` (default 5 s) and derives
   VRAM/GTT free bytes and usage percentages.
-- **SMART monitor** follows `smartd.service` in the journal and expires alerts
-  after `smartd.alert_retention`.
+- **SMART monitor** follows `smartd.service` in the journal, classifies failures
+  and risk attributes, de-duplicates per device/category and persists sticky
+  alerts to `alerts.json`. Journal failures are retried with backoff.
+- **NVMe monitor** polls `nvme smart-log --output-format=json` (or `smartctl
+  --json=o -a`) every `nvme.poll_interval` (default 15 min). It evaluates wear,
+  available spare, media errors, error-log growth and temperature against
+  configurable thresholds.
 
 ## Energy aggregation
 
@@ -96,6 +101,14 @@ The ring, index, last-hour timestamp and lifetime counter are written to
 Writes are atomic: temp file → `fsync` → `rename` → directory `fsync`. On load
 the ring is rotated forward by the whole hours the daemon was down, and missed
 slots are zeroed. State older than seven days is discarded.
+
+## Alert persistence
+
+SMART alerts are stored in `alerts.json` with `first_seen`, `last_seen`, a
+repeat count and a severity. Alerts are keyed by device and category, so a
+health failure does not overwrite a wear warning. The journal reader starts at
+the tail; the direct NVMe poll covers drives that were already unhealthy before
+the daemon started.
 
 ## Startup and shutdown
 

@@ -1,10 +1,11 @@
 """The Framework Power Daemon integration."""
 import asyncio
 import logging
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
 
 import aiohttp
 
+from homeassistant.components import persistent_notification
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_HOST, CONF_PORT, CONF_TOKEN, Platform
 from homeassistant.core import HomeAssistant, callback
@@ -71,6 +72,11 @@ class FrameworkPowerCoordinator(DataUpdateCoordinator):
         self._entity_factories: list[tuple[callable, bool]] = []
         self._dynamic_unsub = None
 
+        # Alert notifications: deduplicate per alert key and keep a cooldown
+        # so a persistent warning does not spam the phone every poll cycle.
+        self._notified_alerts: dict[str, datetime] = {}
+        self._notify_cooldown = timedelta(hours=6)
+
         super().__init__(
             hass,
             _LOGGER,
@@ -135,6 +141,104 @@ class FrameworkPowerCoordinator(DataUpdateCoordinator):
                     ) as response:
                         if response.status != 200:
                             raise UpdateFailed(f"Error fetching status: {response.status}")
-                        return await response.json()
+                        data = await response.json()
+            try:
+                await self._process_alerts(data)
+            except Exception:  # pragma: no cover - defensive
+                _LOGGER.exception("Alert notification failed; continuing")
+            return data
         except Exception as err:
             raise UpdateFailed(f"Error communicating with API: {err}")
+
+    @staticmethod
+    def _collect_alerts(data: dict) -> list[tuple[str, str, str, str]]:
+        """Extract actionable alerts from the daemon payload.
+
+        Returns (dedup_key, severity, title, message) tuples. Severity is part
+        of the key so escalation from warning to critical notifies again.
+        """
+        alerts: list[tuple[str, str, str, str]] = []
+
+        smartd = data.get("smartd") or {}
+        for alert in smartd.get("alerts") or []:
+            severity = alert.get("severity") or "warning"
+            if severity not in ("warning", "critical"):
+                continue
+            key = alert.get("id") or f"{alert.get('device')}|{alert.get('fail_type')}"
+            device = alert.get("device", "disk")
+            message = alert.get("message", "SMART alert")
+            alerts.append(
+                (f"smartd:{key}:{severity}", severity, f"SMART alert on {device}", message)
+            )
+
+        nvme = data.get("nvme") or {}
+        for device in nvme.get("devices") or []:
+            severity = device.get("health")
+            if severity not in ("warning", "critical"):
+                continue
+            dev = device.get("device", "NVMe")
+            issues = "; ".join(device.get("issues") or []) or severity
+            model = device.get("model") or "NVMe"
+            alerts.append(
+                (
+                    f"nvme:{dev}:{severity}",
+                    severity,
+                    f"NVMe health {severity} on {dev}",
+                    f"{model} ({dev}): {issues}",
+                )
+            )
+
+        return alerts
+
+    @staticmethod
+    def _parse_notify_service(value: str) -> tuple[str, str]:
+        """Return (domain, service) for a configured notify service."""
+        value = (value or "").strip()
+        if "." in value:
+            domain, service = value.split(".", 1)
+            return domain or "notify", service
+        return "notify", value
+
+    @staticmethod
+    def _notification_id(key: str) -> str:
+        safe = "".join(ch if ch.isalnum() else "_" for ch in key)
+        return f"{DOMAIN}_{safe}"[:120]
+
+    async def _process_alerts(self, data: dict) -> None:
+        """Create persistent notifications and optionally call notify.*.
+
+        Alerts are deduplicated per key and severity, with a cooldown. The
+        daemon already keeps alerts sticky, so this only fires when a new
+        condition (or an escalation) appears.
+        """
+        now = datetime.now(timezone.utc)
+        for key, severity, title, message in self._collect_alerts(data):
+            last = self._notified_alerts.get(key)
+            if last is not None and now - last < self._notify_cooldown:
+                continue
+            self._notified_alerts[key] = now
+
+            prefix = "CRITICAL: " if severity == "critical" else "Warning: "
+            persistent_notification.async_create(
+                self.hass,
+                message,
+                title=prefix + title,
+                notification_id=self._notification_id(key),
+            )
+
+            if not self.notify_service:
+                notify_service = (data.get("smartd") or {}).get("notify_service")
+            else:
+                notify_service = self.notify_service
+            if not notify_service:
+                continue
+            domain, service = self._parse_notify_service(notify_service)
+            try:
+                await self.hass.services.async_call(
+                    domain,
+                    service,
+                    {"title": prefix + title, "message": message},
+                    blocking=False,
+                )
+            except Exception as err:  # pragma: no cover - defensive
+                _LOGGER.warning("Could not call %s.%s: %s", domain, service, err)

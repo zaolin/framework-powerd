@@ -71,15 +71,14 @@ Only present when `gpu.enabled` is true.
 | GPU VRAM Total | GiB | `gpu.vram_total_bytes` |
 | GPU VRAM Free | GiB | `gpu.vram_free_bytes` |
 | GPU VRAM Usage | % | `gpu.vram_used_percent` |
-| GPU GTT Used | MiB | `gpu.gtt_used_bytes` |
-| GPU GTT Total | MiB | `gpu.gtt_total_bytes` |
-| GPU GTT Free | MiB | `gpu.gtt_free_bytes` |
+| GPU GTT Used | GiB | `gpu.gtt_used_bytes` |
+| GPU GTT Total | GiB | `gpu.gtt_total_bytes` |
+| GPU GTT Free | GiB | `gpu.gtt_free_bytes` |
 | GPU GTT Usage | % | `gpu.gtt_used_percent` |
 | CPU Usage | % | `gpu.cpu_usage_percent` |
 
-GTT stays in MiB to keep the existing entity/statistics stable. VRAM and RAM are
-rendered in GiB. If the daemon is too old to send `*_free_bytes` or
-`*_used_percent`, the integration derives them from used/total.
+VRAM, GTT and RAM are all rendered in GiB. If the daemon is too old to send
+`*_free_bytes` or `*_used_percent`, the integration derives them from used/total.
 
 ### SMART
 
@@ -91,6 +90,52 @@ Only present when `smartd.enabled` is true.
 | SMART Alerts | sensor | number of alerts |
 | SMART `<device>` | sensor | per-device alert count; created dynamically |
 
+SMART alerts are sticky and persisted by the daemon. Each alert has a severity,
+first/last seen timestamp and repeat count in the `alerts` attribute.
+
+### NVMe
+
+Only present when `nvme.enabled` is true and devices are detected.
+
+| Entity | Unit | Source |
+|---|---|---|
+| NVMe `<device>` Health | text (`ok`/`warning`/`critical`) | `health` |
+| NVMe `<device>` Percentage Used | % | `percentage_used` |
+| NVMe `<device>` Available Spare | % | `available_spare` |
+| NVMe `<device>` Media Errors | count | `media_errors` |
+| NVMe `<device>` Error Log Entries | count | `error_log_entries` |
+| NVMe `<device>` Critical Warning | bitmask | `critical_warning` |
+| NVMe `<device>` Temperature | °C | `temperature_celsius` |
+| NVMe `<device>` Data Written | TB (decimal) | `data_written_bytes` |
+| NVMe `<device>` Power-On Hours | h | `power_on_hours` |
+| NVMe `<device>` Unsafe Shutdowns | count | `unsafe_shutdowns` |
+
+### Storage health
+
+| Entity | Type | Meaning |
+|---|---|---|
+| Storage Health | binary sensor (`problem`) | on when any SMART alert or NVMe device is warning/critical |
+
+The `issues` attribute lists the source, device, severity and message.
+
+## Notifications
+
+When a new SMART/NVMe warning or critical condition appears, the integration:
+
+1. Creates a Home Assistant persistent notification.
+2. Calls the configured `notify_service` if one is set.
+
+The integration field takes precedence; if it is empty, the daemon's
+`smartd.notify_service` value from `/smartd/stats` is used as a fallback.
+
+Notifications are deduplicated per alert key and severity with a six-hour
+cooldown, so a persistent warning does not spam the phone every poll cycle.
+The key includes the severity, so escalation from warning to critical notifies
+again.
+
+Leave `notify_service` empty if you prefer to trigger your own automation from
+the Storage Health binary sensor.
+
 ### System information
 
 Kernel Version, Operating System, CPU Model, Total RAM and Daemon Version are
@@ -100,8 +145,8 @@ default. The device page also shows the daemon's `sw_version`.
 ## Dynamic entities
 
 Per-device SMART sensors appear when the first alert for that device is
-received, even if the device was not present at setup time. New RAM/GPU sensors
-are created on the first update that contains the corresponding block.
+received, even if the device was not present at setup time. New RAM/GPU/NVMe
+sensors are created on the first update that contains the corresponding block.
 
 ## Diagnostics
 
@@ -130,6 +175,12 @@ entities:
   - sensor.gpu_gtt_free
   - sensor.gpu_gtt_usage
   - sensor.cpu_usage
+  - binary_sensor.storage_health
+  - sensor.nvme_dev_nvme0_health
+  - sensor.nvme_dev_nvme0_percentage_used
+  - sensor.nvme_dev_nvme0_available_spare
+  - sensor.nvme_dev_nvme0_temperature
+  - sensor.nvme_dev_nvme0_data_written
 ```
 
 Entity IDs depend on your naming; check Developer Tools → States after setup.

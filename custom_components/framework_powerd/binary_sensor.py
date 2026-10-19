@@ -24,6 +24,7 @@ async def async_setup_entry(
         GameRunningBinarySensor(coordinator),
         GamePausedBinarySensor(coordinator),
         SmartdAlertBinarySensor(coordinator),
+        StorageHealthBinarySensor(coordinator),
     ]
 
     async_add_entities(entities)
@@ -72,3 +73,46 @@ class SmartdAlertBinarySensor(FrameworkEntity, BinarySensorEntity):
     def is_on(self):
         alerts = self.coordinator.data.get("smartd", {}).get("alerts", [])
         return len(alerts) > 0
+
+
+class StorageHealthBinarySensor(FrameworkEntity, BinarySensorEntity):
+    """Aggregated SMART/NVMe problem indicator."""
+
+    _attr_name = "Storage Health"
+    _attr_unique_id = "storage_health"
+    _attr_device_class = BinarySensorDeviceClass.PROBLEM
+    _attr_icon = "mdi:harddisk"
+
+    @property
+    def is_on(self):
+        smartd = self.coordinator.data.get("smartd", {})
+        if any(a.get("severity") in ("warning", "critical") for a in smartd.get("alerts", [])):
+            return True
+        nvme = self.coordinator.data.get("nvme", {})
+        return any(d.get("health") in ("warning", "critical") for d in nvme.get("devices", []))
+
+    @property
+    def extra_state_attributes(self):
+        issues = []
+        smartd = self.coordinator.data.get("smartd", {})
+        for alert in smartd.get("alerts", []):
+            issues.append(
+                {
+                    "source": "smartd",
+                    "device": alert.get("device"),
+                    "severity": alert.get("severity"),
+                    "message": alert.get("message"),
+                }
+            )
+        nvme = self.coordinator.data.get("nvme", {})
+        for device in nvme.get("devices", []):
+            if device.get("health") in ("warning", "critical"):
+                issues.append(
+                    {
+                        "source": "nvme",
+                        "device": device.get("device"),
+                        "severity": device.get("health"),
+                        "message": "; ".join(device.get("issues") or []),
+                    }
+                )
+        return {"issues": issues}

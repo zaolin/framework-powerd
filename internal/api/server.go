@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/zaolin/framework-powerd/internal/gpu"
+	"github.com/zaolin/framework-powerd/internal/nvme"
 	"github.com/zaolin/framework-powerd/internal/power"
 	"github.com/zaolin/framework-powerd/internal/smartd"
 	"github.com/zaolin/framework-powerd/internal/sysinfo"
@@ -45,6 +46,7 @@ type StatusResponse struct {
 	Memory           sysinfo.MemoryInfo          `json:"memory"`
 	NetworkDevices   []power.NetworkDeviceStatus `json:"network_devices"`
 	Smartd           *smartd.Stats               `json:"smartd,omitempty"`
+	NVMe             *nvme.Stats                 `json:"nvme,omitempty"`
 	GPU              *gpu.Stats                  `json:"gpu,omitempty"`
 	SystemInfo       sysinfo.SystemInfo          `json:"system_info"`
 }
@@ -53,6 +55,7 @@ type StatusResponse struct {
 type MonitorHealth struct {
 	Turbostat string `json:"turbostat"` // ok | stale | waiting
 	Smartd    bool   `json:"smartd"`
+	NVMe      string `json:"nvme"` // disabled | ok | warning | critical
 	GPU       bool   `json:"gpu"`
 }
 
@@ -73,6 +76,7 @@ type Server struct {
 	pm            *power.PowerManager
 	powerMonitor  *power.PowerMonitor
 	smartdMonitor *smartd.Monitor
+	nvmeMonitor   *nvme.Monitor
 	gpuMonitor    *gpu.Monitor
 	jwtSecret     []byte
 	sysInfo       sysinfo.SystemInfo
@@ -84,11 +88,12 @@ type Server struct {
 }
 
 // NewServer creates a new API server
-func NewServer(pm *power.PowerManager, monitor *power.PowerMonitor, jwtSecret string, smartdMon *smartd.Monitor, gpuMon *gpu.Monitor, sysInfo sysinfo.SystemInfo) *Server {
+func NewServer(pm *power.PowerManager, monitor *power.PowerMonitor, jwtSecret string, smartdMon *smartd.Monitor, nvmeMon *nvme.Monitor, gpuMon *gpu.Monitor, sysInfo sysinfo.SystemInfo) *Server {
 	return &Server{
 		pm:            pm,
 		powerMonitor:  monitor,
 		smartdMonitor: smartdMon,
+		nvmeMonitor:   nvmeMon,
 		gpuMonitor:    gpuMon,
 		jwtSecret:     []byte(jwtSecret),
 		sysInfo:       sysInfo,
@@ -281,6 +286,10 @@ func (s *Server) HandleStatus(w http.ResponseWriter, r *http.Request) {
 		stats := s.smartdMonitor.GetStats()
 		resp.Smartd = &stats
 	}
+	if s.nvmeMonitor != nil {
+		stats := s.nvmeMonitor.GetStats()
+		resp.NVMe = &stats
+	}
 	if s.gpuMonitor != nil {
 		stats := s.gpuMonitor.GetStats()
 		resp.GPU = &stats
@@ -314,10 +323,16 @@ func (s *Server) HandleHealth(w http.ResponseWriter, r *http.Request) {
 	memory := sysinfo.CollectMemory()
 	metrics := s.powerMonitor.PersistenceStatus()
 
+	nvmeHealth := "disabled"
+	if s.nvmeMonitor != nil {
+		nvmeHealth = s.nvmeMonitor.GetStats().HealthSummary()
+	}
+
 	status := "ok"
 	if turbostat == "stale" ||
 		(turbostat == "waiting" && time.Since(s.startedAt) > 30*time.Second) ||
-		metrics.LastError != "" {
+		metrics.LastError != "" ||
+		(nvmeHealth != "disabled" && nvmeHealth != nvme.HealthOK) {
 		status = "degraded"
 	}
 
@@ -331,6 +346,7 @@ func (s *Server) HandleHealth(w http.ResponseWriter, r *http.Request) {
 		Monitors: MonitorHealth{
 			Turbostat: turbostat,
 			Smartd:    s.smartdMonitor != nil,
+			NVMe:      nvmeHealth,
 			GPU:       s.gpuMonitor != nil,
 		},
 		MetricsState: metrics,
@@ -352,7 +368,7 @@ func (s *Server) HandleActivity(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"message": "Activity triggered, idle timer reset"})
 }
 
-// HandleSmartdStats returns SMART health statistics
+// HandleSmartdStats returns SMART health statistics.
 func (s *Server) HandleSmartdStats(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -364,4 +380,18 @@ func (s *Server) HandleSmartdStats(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, s.smartdMonitor.GetStats())
+}
+
+// HandleNVMeStats returns direct NVMe health statistics.
+func (s *Server) HandleNVMeStats(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if s.nvmeMonitor == nil {
+		http.Error(w, "NVMe monitoring not enabled", http.StatusNotFound)
+		return
+	}
+
+	writeJSON(w, http.StatusOK, s.nvmeMonitor.GetStats())
 }

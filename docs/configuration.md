@@ -10,6 +10,13 @@ keys keep their defaults.
 3. `~/.config/framework-powerd/config.json`
 4. No file found — built-in defaults are used.
 
+## Legacy keys
+
+The `ollama` and `pricing` sections from 1.2 and earlier are ignored. Ollama
+monitoring was removed in 1.3; the JSON decoder tolerates unknown keys, so the
+daemon still starts, but those sections have no effect. Remove them to keep the
+file accurate.
+
 ## CLI precedence
 
 Only flags that were explicitly provided override the file. A flag whose value
@@ -43,8 +50,34 @@ happens to equal the built-in default still counts as explicit.
 |---|---|---|---|
 | `enabled` | bool | `false` | Watch smartd journal messages. |
 | `service_unit` | string | `smartd.service` | Journald unit to follow. |
-| `notify_service` | string | `""` | Optional HA notify service metadata. |
-| `alert_retention` | duration | `30s` | How long alerts stay visible. |
+| `notify_service` | string | `""` | Optional HA notify service used by the integration for new warnings. |
+| `alert_retention` | duration | `168h` | How long a sticky alert stays visible after it was last seen. |
+| `state_file` | string | `/var/lib/framework-powerd/alerts.json` | Persisted alert state. |
+
+Alerts are de-duplicated per device and category, keep `first_seen`,
+`last_seen` and `count`, and survive daemon restarts. A critical alert is not
+silently dropped after 30 seconds anymore.
+
+### `nvme`
+
+Direct NVMe SMART polling, independent of smartd journal messages.
+
+| Key | Type | Default | Description |
+|---|---|---|---|
+| `enabled` | bool | `true` | Poll NVMe health directly. |
+| `poll_interval` | duration | `15m` | Poll interval. |
+| `warn_percentage_used` | int | `80` | Wear warning threshold in percent. |
+| `crit_percentage_used` | int | `90` | Wear critical threshold in percent. |
+| `warn_available_spare` | int | `10` | Spare-capacity warning threshold in percent. |
+| `warn_temperature_c` | int | `70` | Temperature warning threshold. |
+| `crit_temperature_c` | int | `80` | Temperature critical threshold. |
+| `warn_err_log_entries` | int | `1` | Error-log warning threshold. |
+| `crit_err_log_entries` | int | `10` | Error-log critical threshold. |
+| `max_media_errors` | int | `0` | Allowed media/data-integrity errors before critical. |
+
+The poller uses `nvme smart-log --output-format=json` first and falls back to
+`smartctl --json=o -a`. If neither tool is installed, polling is disabled and a
+warning is logged. Health is exposed at `/status.nvme` and `/nvme/stats`.
 
 ### `gpu`
 
@@ -96,13 +129,27 @@ back.
   "server": {
     "address": "localhost",
     "port": 8080,
+    "jwt_secret": "",
     "idle_timeout": "5m"
   },
   "smartd": {
     "enabled": true,
     "service_unit": "smartd.service",
     "notify_service": "notify.mobile_app_phone",
-    "alert_retention": "30s"
+    "alert_retention": "168h",
+    "state_file": "/var/lib/framework-powerd/alerts.json"
+  },
+  "nvme": {
+    "enabled": true,
+    "poll_interval": "15m",
+    "warn_percentage_used": 80,
+    "crit_percentage_used": 90,
+    "warn_available_spare": 10,
+    "warn_temperature_c": 70,
+    "crit_temperature_c": 80,
+    "warn_err_log_entries": 1,
+    "crit_err_log_entries": 10,
+    "max_media_errors": 0
   },
   "gpu": {
     "enabled": true,

@@ -2,13 +2,27 @@
   "server": {
     "address": "localhost",
     "port": 8080,
+    "jwt_secret": "",
     "idle_timeout": "5m"
   },
   "smartd": {
     "enabled": true,
     "service_unit": "smartd.service",
     "notify_service": "notify.mobile_app_pixel_11_pro",
-    "alert_retention": "30s"
+    "alert_retention": "168h",
+    "state_file": "/var/lib/framework-powerd/alerts.json"
+  },
+  "nvme": {
+    "enabled": true,
+    "poll_interval": "15m",
+    "warn_percentage_used": 80,
+    "crit_percentage_used": 90,
+    "warn_available_spare": 10,
+    "warn_temperature_c": 70,
+    "crit_temperature_c": 80,
+    "warn_err_log_entries": 1,
+    "crit_err_log_entries": 10,
+    "max_media_errors": 0
   },
   "gpu": {
     "enabled": true,

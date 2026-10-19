@@ -60,3 +60,36 @@ class TestGameRunningBinarySensor:
         mock_coordinator.data["is_game_running"] = False
         mock_coordinator.data["game_pid"] = 4242
         assert GameRunningBinarySensor(mock_coordinator).is_on is False
+
+
+class TestStorageHealthBinarySensor:
+    """Test the aggregated SMART/NVMe storage health indicator."""
+
+    def test_on_with_smartd_critical_alert(self, mock_coordinator):
+        from custom_components.framework_powerd.binary_sensor import StorageHealthBinarySensor
+
+        sensor = StorageHealthBinarySensor(mock_coordinator)
+        assert sensor.is_on is True
+        assert sensor.extra_state_attributes["issues"][0]["source"] == "smartd"
+
+    def test_off_when_everything_healthy(self, mock_coordinator):
+        from custom_components.framework_powerd.binary_sensor import StorageHealthBinarySensor
+
+        mock_coordinator.data["smartd"]["alerts"] = []
+        sensor = StorageHealthBinarySensor(mock_coordinator)
+        assert sensor.is_on is False
+
+    def test_on_with_nvme_warning(self, mock_coordinator):
+        from custom_components.framework_powerd.binary_sensor import StorageHealthBinarySensor
+
+        mock_coordinator.data["smartd"]["alerts"] = []
+        mock_coordinator.data["nvme"]["devices"][0]["health"] = "warning"
+        mock_coordinator.data["nvme"]["devices"][0]["issues"] = ["percentage used 85%"]
+        sensor = StorageHealthBinarySensor(mock_coordinator)
+        assert sensor.is_on is True
+        assert sensor.extra_state_attributes["issues"][0]["severity"] == "warning"
+
+    def test_unique_id(self, mock_coordinator):
+        from custom_components.framework_powerd.binary_sensor import StorageHealthBinarySensor
+
+        assert StorageHealthBinarySensor(mock_coordinator)._attr_unique_id == "storage_health"

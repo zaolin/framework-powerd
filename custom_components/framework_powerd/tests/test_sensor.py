@@ -116,7 +116,7 @@ class TestSystemInfoSensors:
         from custom_components.framework_powerd.sensor import DaemonVersionSensor
 
         sensor = DaemonVersionSensor(mock_coordinator)
-        assert sensor.native_value == "1.3.0"
+        assert sensor.native_value == "1.4.0"
 
     def test_kernel_version_unique_id(self, mock_coordinator):
         from custom_components.framework_powerd.sensor import KernelVersionSensor
@@ -406,14 +406,14 @@ class TestGPUTTGSensors:
         from custom_components.framework_powerd.sensor import GPUTTGTotalSensor
 
         sensor = GPUTTGTotalSensor(mock_coordinator)
-        expected = round(mock_coordinator.data["gpu"]["gtt_total_bytes"] / (1024**2), 2)
+        expected = round(mock_coordinator.data["gpu"]["gtt_total_bytes"] / (1024**3), 2)
         assert sensor.native_value == expected
 
     def test_gtt_free(self, mock_coordinator):
         from custom_components.framework_powerd.sensor import GPUTTGFreeSensor
 
         sensor = GPUTTGFreeSensor(mock_coordinator)
-        expected = round(mock_coordinator.data["gpu"]["gtt_free_bytes"] / (1024**2), 2)
+        expected = round(mock_coordinator.data["gpu"]["gtt_free_bytes"] / (1024**3), 2)
         assert sensor.native_value == expected
 
     def test_gtt_free_fallback(self, mock_coordinator):
@@ -422,7 +422,7 @@ class TestGPUTTGSensors:
         del mock_coordinator.data["gpu"]["gtt_free_bytes"]
         sensor = GPUTTGFreeSensor(mock_coordinator)
         gpu = mock_coordinator.data["gpu"]
-        expected = round((gpu["gtt_total_bytes"] - gpu["gtt_used_bytes"]) / (1024**2), 2)
+        expected = round((gpu["gtt_total_bytes"] - gpu["gtt_used_bytes"]) / (1024**3), 2)
         assert sensor.native_value == expected
 
     def test_gtt_usage(self, mock_coordinator):
@@ -440,3 +440,63 @@ class TestGPUTTGSensors:
         gpu = mock_coordinator.data["gpu"]
         expected = round(gpu["gtt_used_bytes"] / gpu["gtt_total_bytes"] * 100, 1)
         assert sensor.native_value == expected
+
+
+class TestNVMeSensors:
+    """Test direct NVMe health sensors."""
+
+    def test_health_sensor(self, mock_coordinator):
+        from custom_components.framework_powerd.sensor import NVMeHealthSensor
+
+        sensor = NVMeHealthSensor(mock_coordinator, "/dev/nvme0")
+        assert sensor.native_value == "ok"
+        assert sensor._attr_unique_id == "nvme__dev_nvme0_health"
+        assert sensor._device_data["model"] == "WD_BLACK SN850X 2000GB"
+
+    def test_wear_and_spare(self, mock_coordinator):
+        from custom_components.framework_powerd.sensor import (
+            NVMeAvailableSpareSensor,
+            NVMePercentageUsedSensor,
+        )
+
+        assert NVMePercentageUsedSensor(mock_coordinator, "/dev/nvme0").native_value == 7
+        assert NVMeAvailableSpareSensor(mock_coordinator, "/dev/nvme0").native_value == 100
+
+    def test_errors_and_temperature(self, mock_coordinator):
+        from custom_components.framework_powerd.sensor import (
+            NVMeCriticalWarningSensor,
+            NVMeErrorLogSensor,
+            NVMeMediaErrorsSensor,
+            NVMeTemperatureSensor,
+        )
+
+        assert NVMeMediaErrorsSensor(mock_coordinator, "/dev/nvme0").native_value == 0
+        assert NVMeErrorLogSensor(mock_coordinator, "/dev/nvme0").native_value == 0
+        assert NVMeCriticalWarningSensor(mock_coordinator, "/dev/nvme0").native_value == 0
+        assert NVMeTemperatureSensor(mock_coordinator, "/dev/nvme0").native_value == 49
+
+    def test_data_written_and_uptime(self, mock_coordinator):
+        from custom_components.framework_powerd.sensor import (
+            NVMeDataWrittenSensor,
+            NVMePowerOnHoursSensor,
+            NVMeUnsafeShutdownsSensor,
+        )
+
+        assert NVMeDataWrittenSensor(mock_coordinator, "/dev/nvme0").native_value == 120.0
+        assert NVMePowerOnHoursSensor(mock_coordinator, "/dev/nvme0").native_value == 500
+        assert NVMeUnsafeShutdownsSensor(mock_coordinator, "/dev/nvme0").native_value == 4
+
+    def test_missing_device_returns_none(self, mock_coordinator):
+        from custom_components.framework_powerd.sensor import NVMeHealthSensor
+
+        sensor = NVMeHealthSensor(mock_coordinator, "/dev/nvme9")
+        assert sensor.native_value is None
+        assert sensor._device_data == {}
+
+    def test_all_sensor_classes_have_unique_keys(self):
+        from custom_components.framework_powerd.sensor import NVME_SENSOR_CLASSES
+
+        keys = [cls.sensor_key for cls in NVME_SENSOR_CLASSES]
+        assert len(keys) == len(set(keys))
+        assert "health" in keys
+        assert "percentage_used" in keys

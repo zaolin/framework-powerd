@@ -70,3 +70,80 @@ class TestFrameworkPowerCoordinator:
         assert "system_info" in mock_coordinator.data
         assert "kernel_version" in mock_coordinator.data["system_info"]
         assert "cpu_model" in mock_coordinator.data["system_info"]
+
+
+class TestAlertNotifications:
+    """Test alert extraction and notification helpers."""
+
+    def test_collect_alerts_smartd_and_nvme(self, mock_coordinator):
+        from custom_components.framework_powerd import FrameworkPowerCoordinator
+
+        data = mock_coordinator.data
+        data["nvme"]["devices"][0]["health"] = "warning"
+        data["nvme"]["devices"][0]["issues"] = ["percentage used 85%"]
+
+        alerts = FrameworkPowerCoordinator._collect_alerts(data)
+        keys = [a[0] for a in alerts]
+        assert any(key.startswith("smartd:") and key.endswith(":critical") for key in keys)
+        assert any(key.startswith("nvme:/dev/nvme0:warning") for key in keys)
+
+    def test_collect_alerts_ignores_info_and_healthy(self, mock_coordinator):
+        from custom_components.framework_powerd import FrameworkPowerCoordinator
+
+        data = mock_coordinator.data
+        data["smartd"]["alerts"][0]["severity"] = "info"
+        data["nvme"]["devices"][0]["health"] = "ok"
+
+        assert FrameworkPowerCoordinator._collect_alerts(data) == []
+
+    def test_parse_notify_service(self):
+        from custom_components.framework_powerd import FrameworkPowerCoordinator
+
+        assert FrameworkPowerCoordinator._parse_notify_service("notify.mobile_app_x") == (
+            "notify",
+            "mobile_app_x",
+        )
+        assert FrameworkPowerCoordinator._parse_notify_service("mobile_app_x") == (
+            "notify",
+            "mobile_app_x",
+        )
+        assert FrameworkPowerCoordinator._parse_notify_service("") == ("notify", "")
+
+    def test_notification_id_is_safe(self):
+        from custom_components.framework_powerd import FrameworkPowerCoordinator
+
+        notification_id = FrameworkPowerCoordinator._notification_id(
+            "nvme:/dev/nvme0:critical"
+        )
+        assert notification_id.startswith("framework_powerd_")
+        assert "/" not in notification_id
+        assert ":" not in notification_id
+
+
+class TestNotificationDelivery:
+    """Test that notifications are delivered once within the cooldown."""
+
+    def test_process_alerts_dedupes_and_calls_notify(self, mock_coordinator):
+        import asyncio
+        from datetime import timedelta
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        from custom_components.framework_powerd import FrameworkPowerCoordinator
+
+        coordinator = object.__new__(FrameworkPowerCoordinator)
+        coordinator.hass = MagicMock()
+        coordinator.hass.services.async_call = AsyncMock()
+        coordinator.notify_service = "notify.mobile_app_x"
+        coordinator._notified_alerts = {}
+        coordinator._notify_cooldown = timedelta(hours=6)
+
+        data = mock_coordinator.data
+
+        with patch(
+            "custom_components.framework_powerd.persistent_notification.async_create"
+        ) as create:
+            asyncio.run(coordinator._process_alerts(data))
+            asyncio.run(coordinator._process_alerts(data))
+
+        assert create.call_count == 1
+        assert coordinator.hass.services.async_call.await_count == 1

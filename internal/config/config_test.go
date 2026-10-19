@@ -16,8 +16,11 @@ func TestSmartdConfig_Defaults(t *testing.T) {
 	if cfg.Smartd.ServiceUnit != "smartd.service" {
 		t.Errorf("Expected Smartd.ServiceUnit 'smartd.service', got %s", cfg.Smartd.ServiceUnit)
 	}
-	if cfg.Smartd.AlertRetention != "30s" {
-		t.Errorf("Expected Smartd.AlertRetention '30s', got %s", cfg.Smartd.AlertRetention)
+	if cfg.Smartd.AlertRetention != "168h" {
+		t.Errorf("Expected Smartd.AlertRetention '168h', got %s", cfg.Smartd.AlertRetention)
+	}
+	if cfg.Smartd.StateFile != DefaultAlertsStateFile {
+		t.Errorf("Expected Smartd.StateFile %q, got %q", DefaultAlertsStateFile, cfg.Smartd.StateFile)
 	}
 	if cfg.Smartd.NotifyService != "" {
 		t.Errorf("Expected Smartd.NotifyService '', got %s", cfg.Smartd.NotifyService)
@@ -259,5 +262,74 @@ func TestMetricsConfig_GetSaveIntervalFallback(t *testing.T) {
 		if d := cfg.GetSaveInterval(); d != 5*time.Minute {
 			t.Errorf("GetSaveInterval(%q) = %v, want 5m", input, d)
 		}
+	}
+}
+
+func TestNVMeConfig_Defaults(t *testing.T) {
+	cfg := DefaultConfig().NVMe
+	if !cfg.Enabled {
+		t.Error("Expected NVMe polling to be enabled by default")
+	}
+	if cfg.GetPollInterval() != 15*time.Minute {
+		t.Errorf("poll interval = %v, want 15m", cfg.GetPollInterval())
+	}
+	if cfg.WarnPercentageUsed != 80 || cfg.CritPercentageUsed != 90 {
+		t.Errorf("unexpected wear thresholds: %+v", cfg)
+	}
+	if cfg.WarnTemperatureC != 70 || cfg.CritTemperatureC != 80 {
+		t.Errorf("unexpected temperature thresholds: %+v", cfg)
+	}
+}
+
+func TestNVMeConfig_Validate(t *testing.T) {
+	valid := DefaultConfig().NVMe
+	if err := valid.Validate(); err != nil {
+		t.Errorf("valid NVMe config rejected: %v", err)
+	}
+
+	disabled := NVMeConfig{Enabled: false}
+	if err := disabled.Validate(); err != nil {
+		t.Errorf("disabled NVMe config rejected: %v", err)
+	}
+
+	badInterval := valid
+	badInterval.PollInterval = "soon"
+	if err := badInterval.Validate(); err == nil {
+		t.Error("expected invalid poll interval to be rejected")
+	}
+
+	badWear := valid
+	badWear.WarnPercentageUsed = 95
+	if err := badWear.Validate(); err == nil {
+		t.Error("expected warn >= crit wear thresholds to be rejected")
+	}
+
+	badTemp := valid
+	badTemp.WarnTemperatureC = 90
+	if err := badTemp.Validate(); err == nil {
+		t.Error("expected warn >= crit temperature thresholds to be rejected")
+	}
+
+	badErr := valid
+	badErr.WarnErrLogEntries = 20
+	if err := badErr.Validate(); err == nil {
+		t.Error("expected warn >= crit error thresholds to be rejected")
+	}
+}
+
+func TestSmartdConfig_Validate(t *testing.T) {
+	valid := DefaultConfig().Smartd
+	if err := valid.Validate(); err != nil {
+		t.Errorf("valid smartd config rejected: %v", err)
+	}
+
+	bad := valid
+	bad.AlertRetention = "soon"
+	if err := bad.Validate(); err == nil {
+		t.Error("expected invalid alert retention to be rejected")
+	}
+
+	if got := valid.GetAlertRetention(); got != 7*24*time.Hour {
+		t.Errorf("GetAlertRetention = %v, want 168h", got)
 	}
 }

@@ -4,6 +4,33 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 semantic versioning.
 
+## [1.4.0] - 2026-10-19
+
+### Added
+
+- Sticky, de-duplicated SMART alerts with severity, first/last seen and repeat
+  count, persisted to `/var/lib/framework-powerd/alerts.json`.
+- Broader smartd parsing: health, self-test, attributes, critical warning,
+  media errors, available spare, percentage used, error-log growth, pending/
+  offline sectors, reallocated sectors, ATA errors and temperature warnings.
+- Journal reader retry with backoff.
+- Direct NVMe health polling via `nvme smart-log` with `smartctl` fallback.
+- NVMe wear, spare, media-error, error-log and temperature thresholds.
+- `GET /nvme/stats`, `/status.nvme`, and `monitors.nvme` in `/healthz`.
+- Home Assistant NVMe sensors and an aggregated Storage Health binary sensor.
+- Persistent notifications and optional `notify_service` calls for new
+  warning/critical storage alerts, with dedup and a six-hour cooldown.
+
+### Changed
+
+- `smartd.alert_retention` now defaults to `168h` and means "stay visible after
+  last seen" instead of a 30-second TTL.
+- SMART alerts are keyed per device and category, so different failures on the
+  same disk no longer overwrite each other.
+- Home Assistant GTT sensors now render in GiB instead of MiB, matching RAM and
+  VRAM.
+- Home Assistant integration version bumped to 1.4.0.
+
 ## [1.3.0] - 2026-10-19
 
 ### Added

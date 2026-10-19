@@ -62,6 +62,16 @@ async def async_setup_entry(
             GPUCPUUsageSensor(coord),
         ]
 
+    def _nvme_entities(coord):
+        entities = []
+        nvme = (coord.data or {}).get("nvme", {})
+        for device in nvme.get("devices", []):
+            name = device.get("device")
+            if not name:
+                continue
+            entities.extend(cls(coord, name) for cls in NVME_SENSOR_CLASSES)
+        return entities
+
     # Add SMART sensors
     entities.append(SmartdAlertsSensor(coordinator))
 
@@ -81,6 +91,11 @@ async def async_setup_entry(
     gpu_data = coordinator.data.get("gpu", {})
     if gpu_data:
         entities.extend(_gpu_entities(coordinator))
+
+    # Add NVMe health sensors (one set per device)
+    nvme_data = coordinator.data.get("nvme", {})
+    if nvme_data.get("devices"):
+        entities.extend(_nvme_entities(coordinator))
 
     # Add system info sensors (always present — static data from /status)
     sysinfo_data = coordinator.data.get("system_info", {})
@@ -107,10 +122,17 @@ async def async_setup_entry(
             return _gpu_entities(coord)
         return []
 
+    def _nvme_sensors_factory(coord):
+        if (coord.data or {}).get("nvme", {}).get("devices"):
+            return _nvme_entities(coord)
+        return []
+
     if not memory_data:
         coordinator.register_entity_factory(_memory_sensors_factory)
     if not gpu_data:
         coordinator.register_entity_factory(_gpu_sensors_factory)
+    if not nvme_data.get("devices"):
+        coordinator.register_entity_factory(_nvme_sensors_factory)
 
     # A11: register a dynamic factory so per-device SMART alert entities appear
     # when they first show up in coordinator data, even if they were absent at
@@ -452,7 +474,7 @@ class GPUTTGUsedSensor(FrameworkEntity, SensorEntity):
     _attr_unique_id = "gpu_gtt_used"
     _attr_device_class = SensorDeviceClass.DATA_SIZE
     _attr_state_class = SensorStateClass.MEASUREMENT
-    _attr_native_unit_of_measurement = UnitOfInformation.MEBIBYTES
+    _attr_native_unit_of_measurement = UnitOfInformation.GIBIBYTES
     _attr_suggested_display_precision = 2
     _attr_icon = "mdi:memory"
 
@@ -460,7 +482,7 @@ class GPUTTGUsedSensor(FrameworkEntity, SensorEntity):
     def native_value(self):
         gpu_data = self.coordinator.data.get("gpu", {})
         gtt_bytes = gpu_data.get("gtt_used_bytes", 0)
-        return round(gtt_bytes / (1024**2), 2)
+        return round(gtt_bytes / (1024**3), 2)
 
 
 class GPUTTGTotalSensor(FrameworkEntity, SensorEntity):
@@ -469,7 +491,7 @@ class GPUTTGTotalSensor(FrameworkEntity, SensorEntity):
     _attr_unique_id = "gpu_gtt_total"
     _attr_device_class = SensorDeviceClass.DATA_SIZE
     _attr_state_class = SensorStateClass.MEASUREMENT
-    _attr_native_unit_of_measurement = UnitOfInformation.MEBIBYTES
+    _attr_native_unit_of_measurement = UnitOfInformation.GIBIBYTES
     _attr_suggested_display_precision = 2
     _attr_icon = "mdi:memory"
 
@@ -477,7 +499,7 @@ class GPUTTGTotalSensor(FrameworkEntity, SensorEntity):
     def native_value(self):
         gpu_data = self.coordinator.data.get("gpu", {})
         gtt_bytes = gpu_data.get("gtt_total_bytes", 0)
-        return round(gtt_bytes / (1024**2), 2)
+        return round(gtt_bytes / (1024**3), 2)
 
 
 class GPUTTGFreeSensor(FrameworkEntity, SensorEntity):
@@ -486,7 +508,7 @@ class GPUTTGFreeSensor(FrameworkEntity, SensorEntity):
     _attr_unique_id = "gpu_gtt_free"
     _attr_device_class = SensorDeviceClass.DATA_SIZE
     _attr_state_class = SensorStateClass.MEASUREMENT
-    _attr_native_unit_of_measurement = UnitOfInformation.MEBIBYTES
+    _attr_native_unit_of_measurement = UnitOfInformation.GIBIBYTES
     _attr_suggested_display_precision = 2
     _attr_icon = "mdi:memory"
 
@@ -499,7 +521,7 @@ class GPUTTGFreeSensor(FrameworkEntity, SensorEntity):
                 gpu_data.get("gtt_total_bytes", 0) - gpu_data.get("gtt_used_bytes", 0),
                 0,
             )
-        return round(free / (1024**2), 2)
+        return round(free / (1024**3), 2)
 
 
 class GPUTTGUsageSensor(FrameworkEntity, SensorEntity):
@@ -535,6 +557,159 @@ class GPUCPUUsageSensor(FrameworkEntity, SensorEntity):
     def native_value(self):
         gpu_data = self.coordinator.data.get("gpu", {})
         return round(gpu_data.get("cpu_usage_percent", 0), 1)
+
+
+# NVMe Sensors
+
+class NVMeDeviceSensor(FrameworkEntity, SensorEntity):
+    """Base class for per-NVMe-device sensors."""
+
+    sensor_key = ""
+    sensor_name = ""
+    value_key = ""
+    native_unit = None
+    device_class = None
+    state_class = SensorStateClass.MEASUREMENT
+    scale = 1
+    precision = None
+    icon_name = "mdi:harddisk"
+
+    def __init__(self, coordinator, device):
+        super().__init__(coordinator)
+        self._device = device
+        self._attr_name = f"NVMe {device} {self.sensor_name}"
+        self._attr_unique_id = f"nvme_{device.replace('/', '_')}_{self.sensor_key}"
+        self._attr_native_unit_of_measurement = self.native_unit
+        self._attr_device_class = self.device_class
+        self._attr_state_class = self.state_class
+        self._attr_icon = self.icon_name
+        if self.precision is not None:
+            self._attr_suggested_display_precision = self.precision
+
+    @property
+    def _device_data(self):
+        nvme = self.coordinator.data.get("nvme", {})
+        for device in nvme.get("devices", []):
+            if device.get("device") == self._device:
+                return device
+        return {}
+
+    @property
+    def native_value(self):
+        value = self._device_data.get(self.value_key)
+        if value is None:
+            return None
+        if isinstance(value, (int, float)) and self.scale != 1:
+            value = value / self.scale
+            return round(value, self.precision or 2)
+        return value
+
+
+class NVMeHealthSensor(NVMeDeviceSensor):
+    sensor_key = "health"
+    sensor_name = "Health"
+    value_key = "health"
+    state_class = None
+
+    @property
+    def icon(self):
+        return {
+            "ok": "mdi:check-circle",
+            "warning": "mdi:alert",
+            "critical": "mdi:alert-octagon",
+        }.get(self.native_value, "mdi:harddisk")
+
+
+class NVMePercentageUsedSensor(NVMeDeviceSensor):
+    sensor_key = "percentage_used"
+    sensor_name = "Percentage Used"
+    value_key = "percentage_used"
+    native_unit = "%"
+    precision = 1
+    icon_name = "mdi:chart-donut"
+
+
+class NVMeAvailableSpareSensor(NVMeDeviceSensor):
+    sensor_key = "available_spare"
+    sensor_name = "Available Spare"
+    value_key = "available_spare"
+    native_unit = "%"
+    precision = 1
+    icon_name = "mdi:shield-check"
+
+
+class NVMeMediaErrorsSensor(NVMeDeviceSensor):
+    sensor_key = "media_errors"
+    sensor_name = "Media Errors"
+    value_key = "media_errors"
+    icon_name = "mdi:alert-circle"
+
+
+class NVMeErrorLogSensor(NVMeDeviceSensor):
+    sensor_key = "error_log_entries"
+    sensor_name = "Error Log Entries"
+    value_key = "error_log_entries"
+    icon_name = "mdi:script-text-alert"
+
+
+class NVMeCriticalWarningSensor(NVMeDeviceSensor):
+    sensor_key = "critical_warning"
+    sensor_name = "Critical Warning"
+    value_key = "critical_warning"
+    icon_name = "mdi:alert-octagon"
+
+
+class NVMeTemperatureSensor(NVMeDeviceSensor):
+    sensor_key = "temperature"
+    sensor_name = "Temperature"
+    value_key = "temperature_celsius"
+    native_unit = "°C"
+    device_class = SensorDeviceClass.TEMPERATURE
+    precision = 0
+    icon_name = "mdi:thermometer"
+
+
+class NVMeDataWrittenSensor(NVMeDeviceSensor):
+    sensor_key = "data_written"
+    sensor_name = "Data Written"
+    value_key = "data_written_bytes"
+    native_unit = UnitOfInformation.TERABYTES
+    device_class = SensorDeviceClass.DATA_SIZE
+    scale = 1000**4
+    precision = 2
+    icon_name = "mdi:database"
+
+
+class NVMePowerOnHoursSensor(NVMeDeviceSensor):
+    sensor_key = "power_on_hours"
+    sensor_name = "Power-On Hours"
+    value_key = "power_on_hours"
+    native_unit = UnitOfTime.HOURS
+    device_class = SensorDeviceClass.DURATION
+    state_class = SensorStateClass.TOTAL_INCREASING
+    icon_name = "mdi:clock-outline"
+
+
+class NVMeUnsafeShutdownsSensor(NVMeDeviceSensor):
+    sensor_key = "unsafe_shutdowns"
+    sensor_name = "Unsafe Shutdowns"
+    value_key = "unsafe_shutdowns"
+    state_class = SensorStateClass.TOTAL_INCREASING
+    icon_name = "mdi:power-plug-off"
+
+
+NVME_SENSOR_CLASSES = [
+    NVMeHealthSensor,
+    NVMePercentageUsedSensor,
+    NVMeAvailableSpareSensor,
+    NVMeMediaErrorsSensor,
+    NVMeErrorLogSensor,
+    NVMeCriticalWarningSensor,
+    NVMeTemperatureSensor,
+    NVMeDataWrittenSensor,
+    NVMePowerOnHoursSensor,
+    NVMeUnsafeShutdownsSensor,
+]
 
 
 # System Info Sensors

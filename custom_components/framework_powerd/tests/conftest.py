@@ -53,10 +53,47 @@ def mock_coordinator():
         },
         "smartd": {
             "alerts": [
-                {"device": "/dev/sda", "fail_type": "SelfTest", "message": "FAILED SMART self-test"},
+                {
+                    "id": "/dev/sda|selftest",
+                    "device": "/dev/sda",
+                    "fail_type": "selftest",
+                    "severity": "critical",
+                    "message": "FAILED SMART self-test",
+                    "raw": "Device: /dev/sda, FAILED SMART self-test",
+                    "first_seen": "2026-01-01T00:00:00Z",
+                    "last_seen": "2026-01-01T00:00:00Z",
+                    "count": 1,
+                    "timestamp": "2026-01-01T00:00:00Z",
+                },
             ],
             "last_check": "2026-01-01T00:00:00Z",
             "notify_service": "notify.mobile_phone",
+        },
+        "nvme": {
+            "enabled": True,
+            "last_update": "2026-01-01T00:00:00Z",
+            "devices": [
+                {
+                    "device": "/dev/nvme0",
+                    "model": "WD_BLACK SN850X 2000GB",
+                    "serial": "23202F801634",
+                    "firmware": "620361WD",
+                    "source": "nvme",
+                    "critical_warning": 0,
+                    "percentage_used": 7,
+                    "available_spare": 100,
+                    "available_spare_threshold": 10,
+                    "media_errors": 0,
+                    "error_log_entries": 0,
+                    "temperature_celsius": 49,
+                    "data_written_bytes": 120 * 1000**4,
+                    "power_on_hours": 500,
+                    "unsafe_shutdowns": 4,
+                    "health": "ok",
+                    "issues": [],
+                    "last_update": "2026-01-01T00:00:00Z",
+                }
+            ],
         },
         "system_info": {
             "kernel_version": "6.12.1-cachyos-x86_64",
@@ -65,7 +102,7 @@ def mock_coordinator():
             "cpu_model": "AMD Ryzen AI 7 350 w/ Radeon 860M",
             "cpu_count": 16,
             "total_ram_bytes": 48838284 * 1024,
-            "daemon_version": "1.3.0",
+            "daemon_version": "1.4.0",
         },
         "gpu": {
             "vram_used_bytes": 2984828928,

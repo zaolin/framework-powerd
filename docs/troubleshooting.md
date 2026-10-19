@@ -103,6 +103,53 @@ kill -CONT <pid>
 - smartd must log to journald and use the configured `service_unit` (default
   `smartd.service`).
 - Check the journal: `journalctl -u smartd.service`.
+- Alerts are sticky and persisted to `smartd.state_file`; check
+  `/smartd/stats` and `/healthz`.
+- If smartd logged a failure before the daemon started, the direct NVMe poll
+  still catches current health, but journal-only events from the past are not
+  replayed.
+
+## NVMe health is unavailable or zero
+
+- Install `nvme-cli` (preferred) or `smartmontools`:
+  ```bash
+  sudo apt install nvme-cli smartmontools
+  # or: sudo pacman -S nvme-cli smartmontools
+  ```
+- The daemon must run as root to read NVMe SMART data. The shipped unit does.
+- Verify manually:
+  ```bash
+  sudo nvme smart-log --output-format=json /dev/nvme0
+  sudo smartctl --json=o -a /dev/nvme0
+  ```
+- Check `/healthz` → `monitors.nvme` and `/status.nvme`; `last_error` explains
+  a failed poll.
+- If neither tool is installed, NVMe polling is disabled and smartd journal
+  detection remains active.
+
+## NVMe warnings or notifications are too noisy / too quiet
+
+Tune the `nvme` section:
+
+- `warn_percentage_used` / `crit_percentage_used` — wear thresholds.
+- `warn_available_spare` — spare capacity warning.
+- `warn_temperature_c` / `crit_temperature_c` — temperature.
+- `warn_err_log_entries` / `crit_err_log_entries` — error-log growth.
+- `max_media_errors` — allowed media errors before critical.
+
+Notifications are deduplicated per alert key and severity with a six-hour
+cooldown. A persistent warning re-notifies after the cooldown; an escalation
+from warning to critical notifies immediately.
+
+## Storage notifications do not arrive
+
+- The integration creates a persistent notification and calls `notify_service`
+  when set.
+- In Home Assistant, verify the service exists under Developer Tools → Actions
+  and use the full name, e.g. `notify.mobile_app_pixel_11_pro`.
+- The Storage Health binary sensor is on when any SMART alert or NVMe device is
+  warning/critical. You can build your own automation from it.
+- Check Home Assistant logs for `Could not call notify.*`.
 
 ## API returns 429
 

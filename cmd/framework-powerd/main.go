@@ -22,6 +22,7 @@ import (
 	"github.com/zaolin/framework-powerd/internal/detector"
 	"github.com/zaolin/framework-powerd/internal/gpu"
 	"github.com/zaolin/framework-powerd/internal/monitor"
+	"github.com/zaolin/framework-powerd/internal/nvme"
 	"github.com/zaolin/framework-powerd/internal/peripherals"
 	"github.com/zaolin/framework-powerd/internal/power"
 	"github.com/zaolin/framework-powerd/internal/smartd"
@@ -114,6 +115,12 @@ func runServer() {
 		log.Fatalf("Invalid configuration: %v", err)
 	}
 	if err := cfg.Metrics.Validate(); err != nil {
+		log.Fatalf("Invalid configuration: %v", err)
+	}
+	if err := cfg.Smartd.Validate(); err != nil {
+		log.Fatalf("Invalid configuration: %v", err)
+	}
+	if err := cfg.NVMe.Validate(); err != nil {
 		log.Fatalf("Invalid configuration: %v", err)
 	}
 
@@ -346,10 +353,17 @@ func runServer() {
 
 	// Start Smartd Monitor (if enabled)
 	var smartdMonitor *smartd.Monitor
+	var smartdCancel context.CancelFunc
 	if cfg.Smartd.Enabled {
 		log.Println("Smartd monitoring enabled")
 		smartdMonitor = smartd.NewMonitor(cfg.Smartd)
-		smartdCtx, smartdCancel := context.WithCancel(context.Background())
+		if restored, err := smartdMonitor.LoadState(); err != nil {
+			log.Printf("[SmartdMonitor] Could not restore alerts: %v", err)
+		} else if restored {
+			log.Println("[SmartdMonitor] Restored persisted alerts.")
+		}
+		smartdCtx, cancel := context.WithCancel(context.Background())
+		smartdCancel = cancel
 		defer smartdCancel()
 		go func() {
 			if err := smartdMonitor.Start(smartdCtx); err != nil {
@@ -360,6 +374,16 @@ func runServer() {
 				}
 			}
 		}()
+	}
+
+	// Start direct NVMe health polling (if enabled)
+	var nvmeMonitor *nvme.Monitor
+	if cfg.NVMe.Enabled {
+		log.Println("NVMe health polling enabled")
+		nvmeMonitor = nvme.NewMonitor(cfg.NVMe)
+		nvmeCtx, nvmeCancel := context.WithCancel(context.Background())
+		defer nvmeCancel()
+		go nvmeMonitor.Start(nvmeCtx)
 	}
 
 	// Start GPU Monitor (if enabled)
@@ -389,7 +413,7 @@ func runServer() {
 	// Collect static system info once at startup.
 	sysInfo := sysinfo.Collect()
 
-	apiServer := api.NewServer(pm, powerMon, jwtSecret, smartdMonitor, gpuMonitor, sysInfo)
+	apiServer := api.NewServer(pm, powerMon, jwtSecret, smartdMonitor, nvmeMonitor, gpuMonitor, sysInfo)
 
 	mux := http.NewServeMux()
 
@@ -398,6 +422,7 @@ func runServer() {
 	activityHandler := apiServer.AuthMiddleware(apiServer.RateLimit(apiServer.HandleActivity))
 	statusHandler := apiServer.AuthMiddleware(apiServer.HandleStatus)
 	statsHandler := apiServer.AuthMiddleware(apiServer.HandleSmartdStats)
+	nvmeHandler := apiServer.AuthMiddleware(apiServer.HandleNVMeStats)
 
 	// When auth is disabled (--disable-auth), AuthMiddleware passes through.
 	if authEnabled {
@@ -413,6 +438,7 @@ func runServer() {
 	mux.HandleFunc("/status", statusHandler)
 	mux.HandleFunc("/activity", activityHandler)
 	mux.HandleFunc("/smartd/stats", statsHandler)
+	mux.HandleFunc("/nvme/stats", nvmeHandler)
 	// S8: 404 catch-all for unmatched paths.
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
@@ -483,6 +509,16 @@ func runServer() {
 	pwrCancel()
 	if err := powerMon.SaveState(); err != nil {
 		log.Printf("Failed to save metrics state on shutdown: %v", err)
+	}
+
+	// Flush sticky SMART alerts before exit.
+	if smartdMonitor != nil {
+		if smartdCancel != nil {
+			smartdCancel()
+		}
+		if err := smartdMonitor.SaveState(); err != nil {
+			log.Printf("Failed to save SMART alerts on shutdown: %v", err)
+		}
 	}
 
 	// Give the HTTP server up to 5 seconds to finish in-flight requests.

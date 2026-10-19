@@ -12,7 +12,9 @@ A Go daemon to automatically manage power profiles on the **Framework Desktop**,
 - **Game Pausing**: Recursively pauses the entire process tree of a Steam game (including Proton/Wine wrappers) when idle. **Syncs state** on startup to prevent conflicts.
 - **Steam Remote Play Detection**: Detects virtual input devices from Remote Play (specifically `js` interfaces) to keep the system active.
 - **GPU Monitoring**: Tracks AMD GPU metrics via sysfs (VRAM, GTT, temperature, power) and system CPU usage via `/proc/stat`.
-- **SMART Health Monitoring**: Monitors SMART health alerts via smartd journald logs for hard drive failure detection.
+- **SMART Health Monitoring**: Monitors smartd journald logs, keeps sticky persisted alerts, and classifies health, wear and sector failures.
+- **NVMe Health Polling**: Directly polls `nvme smart-log`/`smartctl` for wear, available spare, media errors, error-log growth and temperature, with configurable warning/critical thresholds.
+- **Storage Notifications**: Home Assistant persistent notifications and optional `notify_service` calls for new SMART/NVMe warnings.
 - **Persistent Energy Metrics**: 24h, 7d and lifetime energy aggregates survive daemon restarts (atomic JSON state file).
 - **Health Endpoint**: Unauthenticated `/healthz` with monitor and persistence status for systemd/monitoring probes.
 - **REST API**: Allows manual mode overriding, idle resetting, and usage statistics.
@@ -167,6 +169,8 @@ The daemon relies on the following tools:
 - `powerprofilesctl`: For pinning the balanced system power profile.
 - `turbostat`: For accurate power monitoring (usually part of `linux-tools` or `linux-cpupower`).
 - `libsystemd-dev`: Required for building (SMART journald integration uses cgo).
+- `smartmontools` (`smartd`, `smartctl`): SMART journal monitoring and NVMe fallback polling.
+- `nvme-cli` (`nvme`): Preferred direct NVMe health polling (optional but recommended).
 - `powertop` (Optional): For auto-tuning power parameters.
 - `scxctl` (Optional): For sched-ext scheduler management (pinned to gaming mode).
 
@@ -184,8 +188,14 @@ Configure smartd to log to journald. Add to `/etc/smartd.conf`:
 ```
 Or for NVMe:
 ```
-/dev/nvme0n1 -a -W 4,45,50 -m root
+/dev/nvme0 -a -W 5,60,70 -m root
 ```
+
+The daemon also polls NVMe health directly every 15 minutes, so wear and
+spare-capacity warnings do not depend on a journal event. Thresholds and
+persistence are configured in the `nvme` and `smartd` sections; see
+[Configuration](docs/configuration.md). Alerts survive daemon restarts and are
+exposed through `/smartd/stats`, `/nvme/stats` and the Storage Health sensor.
 
 ## Installation
 
@@ -298,11 +308,14 @@ This project is compatible with [HACS](https://hacs.xyz/) (Home Assistant Commun
     *   GPU Temperature (°C)
     *   GPU Power (Watts)
     *   GPU VRAM Used/Total/Free (GiB) and Usage (%)
-    *   GPU GTT Used/Total/Free (MiB) and Usage (%)
+    *   GPU GTT Used/Total/Free (GiB) and Usage (%)
     *   CPU Usage (%)
 *   **SMART Health** (if enabled):
     *   SMART Alert (Binary Sensor)
     *   SMART Alerts Count
+*   **NVMe Health** (if enabled):
+    *   Per-device Health, Percentage Used, Available Spare, Media Errors, Error Log Entries, Temperature, Data Written, Power-On Hours, Unsafe Shutdowns
+    *   Storage Health (aggregated problem binary sensor)
 *   **System Information** (diagnostic): Kernel, OS, CPU model, total RAM, daemon version
 
 ### API Control
@@ -377,13 +390,27 @@ The daemon supports a JSON configuration file. The full reference is in [Configu
   "server": {
     "address": "0.0.0.0",
     "port": 8080,
+    "jwt_secret": "",
     "idle_timeout": "5m"
   },
   "smartd": {
     "enabled": true,
     "service_unit": "smartd.service",
     "notify_service": "notify.mobile_phone",
-    "alert_retention": "30s"
+    "alert_retention": "168h",
+    "state_file": "/var/lib/framework-powerd/alerts.json"
+  },
+  "nvme": {
+    "enabled": true,
+    "poll_interval": "15m",
+    "warn_percentage_used": 80,
+    "crit_percentage_used": 90,
+    "warn_available_spare": 10,
+    "warn_temperature_c": 70,
+    "crit_temperature_c": 80,
+    "warn_err_log_entries": 1,
+    "crit_err_log_entries": 10,
+    "max_media_errors": 0
   },
   "gpu": {
     "enabled": true,
@@ -405,8 +432,16 @@ The daemon supports a JSON configuration file. The full reference is in [Configu
 | `server.port` | Port | int | `8080` | HTTP port |
 | `server.idle_timeout` | Idle Timeout | duration | `5m` | Time before idle |
 | `smartd.enabled` | Enabled | bool | `false` | Enable SMART monitoring |
-| `smartd.notify_service` | Notify Service | string | `""` | HA notify service |
-| `smartd.alert_retention` | Alert Retention | duration | `30s` | How long to keep alerts |
+| `smartd.notify_service` | Notify Service | string | `""` | HA notify service for new warnings |
+| `smartd.alert_retention` | Alert Retention | duration | `168h` | How long a sticky alert stays visible |
+| `smartd.state_file` | State File | string | `/var/lib/framework-powerd/alerts.json` | Persisted alert state |
+| `nvme.enabled` | Enabled | bool | `true` | Direct NVMe health polling |
+| `nvme.poll_interval` | Poll Interval | duration | `15m` | NVMe polling frequency |
+| `nvme.warn_percentage_used` | Wear Warning | int | `80` | Wear warning threshold (%) |
+| `nvme.crit_percentage_used` | Wear Critical | int | `90` | Wear critical threshold (%) |
+| `nvme.warn_available_spare` | Spare Warning | int | `10` | Spare warning threshold (%) |
+| `nvme.warn_temperature_c` | Temp Warning | int | `70` | Temperature warning (°C) |
+| `nvme.crit_temperature_c` | Temp Critical | int | `80` | Temperature critical (°C) |
 | `gpu.enabled` | Enabled | bool | `false` | Enable GPU monitoring |
 | `gpu.poll_interval` | Poll Interval | duration | `5s` | GPU polling frequency |
 | `metrics.persist` | Persist | bool | `true` | Persist energy aggregates across restarts |
