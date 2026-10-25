@@ -147,3 +147,86 @@ class TestNotificationDelivery:
 
         assert create.call_count == 1
         assert coordinator.hass.services.async_call.await_count == 1
+
+
+class TestDynamicEntityFactories:
+    """Test the dynamic entity registrar used for late-appearing entities."""
+
+    @staticmethod
+    def _coordinator(callbacks):
+        from custom_components.framework_powerd import FrameworkPowerCoordinator
+
+        coord = object.__new__(FrameworkPowerCoordinator)
+        coord._entity_factories = []
+        coord._dynamic_unsub = None
+        coord.last_update_success = True
+        coord.data = {}
+        coord.async_add_listener = lambda cb: (callbacks.append(cb), (lambda: None))[1]
+        return coord
+
+    def test_one_shot_factory_is_dropped_after_first_result(self):
+        callbacks = []
+        coord = self._coordinator(callbacks)
+        calls = []
+
+        def factory(_coord):
+            calls.append(1)
+            return ["entity"]
+
+        coord.register_entity_factory(factory)
+
+        added = []
+        coord.attach_dynamic_registrar(added.extend)
+        coord.data = {"llm": {}}
+        callbacks[0]()
+        callbacks[0]()
+
+        assert added == ["entity"]
+        assert len(calls) == 1, "a one-shot factory must not run again"
+
+    def test_persistent_factory_stays_registered_and_can_grow(self):
+        callbacks = []
+        coord = self._coordinator(callbacks)
+        seen = []
+        calls = []
+
+        def factory(c):
+            calls.append(1)
+            new = []
+            for key in c.data.get("keys", []):
+                if key not in seen:
+                    seen.append(key)
+                    new.append(key)
+            return new
+
+        coord.register_entity_factory(factory, persistent=True)
+
+        added = []
+        coord.attach_dynamic_registrar(added.extend)
+        coord.data = {"keys": ["a"]}
+        callbacks[0]()
+        coord.data = {"keys": ["a", "b"]}
+        callbacks[0]()
+        callbacks[0]()
+
+        assert added == ["a", "b"]
+        assert len(calls) == 3, "a persistent factory must keep running"
+
+    def test_factories_are_skipped_on_failed_update(self):
+        callbacks = []
+        coord = self._coordinator(callbacks)
+        calls = []
+
+        def factory(_coord):
+            calls.append(1)
+            return ["entity"]
+
+        coord.register_entity_factory(factory)
+        added = []
+        coord.attach_dynamic_registrar(added.extend)
+
+        coord.last_update_success = False
+        callbacks[0]()
+
+        assert added == []
+        assert calls == []

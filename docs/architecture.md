@@ -50,6 +50,7 @@ flowchart TD
         SMART["smartd monitor"]
         NVMe["NVMe monitor"]
         Mem["memory collector"]
+        LLM["LLM access-log tailer"]
     end
 
     Turbo --> PowerMon["Power monitor"]
@@ -61,6 +62,8 @@ flowchart TD
     NVMe --> Status
     NVMe --> Alerts
     Mem --> Status
+    CaddyLog[("caddy access log")] --> LLM
+    LLM --> Status
     API --> Status
     Status --> HA["Home Assistant integration"]
     HA -->|"select / button / services"| API
@@ -71,7 +74,8 @@ callbacks take a mutex, so idle, remote-play, Steam and API events cannot
 interleave mode changes or pause/resume operations.
 
 The API exposes `/status` (including a `health` block and `tunable_mode`),
-`/healthz`, `/mode`, `/activity`, `/smartd/stats` and `/nvme/stats`. The Home
+`/healthz`, `/mode`, `/activity`, `/smartd/stats`, `/nvme/stats` and
+`/llm/stats`. The Home
 Assistant integration polls `/status`, creates notifications from SMART/NVMe
 warnings, and can call `/mode` and `/activity` through its select entity,
 button and services.

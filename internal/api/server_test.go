@@ -12,6 +12,7 @@ import (
 
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/zaolin/framework-powerd/internal/config"
+	"github.com/zaolin/framework-powerd/internal/llm"
 	"github.com/zaolin/framework-powerd/internal/nvme"
 	"github.com/zaolin/framework-powerd/internal/power"
 	"github.com/zaolin/framework-powerd/internal/smartd"
@@ -48,7 +49,7 @@ func TestNewServer(t *testing.T) {
 	pm.SetState(false, false, false, 0, false)
 	powerMon := power.NewPowerMonitor()
 
-	server := NewServer(pm, powerMon, "", nil, nil, nil, sysinfo.SystemInfo{})
+	server := NewServer(pm, powerMon, "", nil, nil, nil, nil, sysinfo.SystemInfo{})
 
 	if server.pm != pm {
 		t.Error("PowerManager not set correctly")
@@ -66,7 +67,7 @@ func TestNewServer_WithJWT(t *testing.T) {
 	powerMon := power.NewPowerMonitor()
 
 	secret := "test-secret"
-	server := NewServer(pm, powerMon, secret, nil, nil, nil, sysinfo.SystemInfo{})
+	server := NewServer(pm, powerMon, secret, nil, nil, nil, nil, sysinfo.SystemInfo{})
 
 	if string(server.jwtSecret) != secret {
 		t.Error("JWT secret not set correctly")
@@ -77,7 +78,7 @@ func TestNewServer_WithSmartd(t *testing.T) {
 	pm := power.NewPowerManager()
 	powerMon := power.NewPowerMonitor()
 
-	server := NewServer(pm, powerMon, "", nil, nil, nil, sysinfo.SystemInfo{})
+	server := NewServer(pm, powerMon, "", nil, nil, nil, nil, sysinfo.SystemInfo{})
 
 	if server.smartdMonitor != nil {
 		t.Error("SmartdMonitor should be nil")
@@ -94,7 +95,7 @@ func TestHandleMode_Performance(t *testing.T) {
 	pm := power.NewPowerManager()
 	pm.SetState(false, false, false, 0, false)
 	powerMon := power.NewPowerMonitor()
-	server := NewServer(pm, powerMon, "", nil, nil, nil, sysinfo.SystemInfo{})
+	server := NewServer(pm, powerMon, "", nil, nil, nil, nil, sysinfo.SystemInfo{})
 
 	// Inject a fake runner so powerprofilesctl "succeeds" without shelling out.
 	withRunner(t, &fakeRunner{available: map[string]bool{"powerprofilesctl": true}})
@@ -124,7 +125,7 @@ func TestHandleMode_Powersave(t *testing.T) {
 	pm := power.NewPowerManager()
 	pm.SetState(false, false, false, 0, false)
 	powerMon := power.NewPowerMonitor()
-	server := NewServer(pm, powerMon, "", nil, nil, nil, sysinfo.SystemInfo{})
+	server := NewServer(pm, powerMon, "", nil, nil, nil, nil, sysinfo.SystemInfo{})
 
 	withRunner(t, &fakeRunner{available: map[string]bool{"powerprofilesctl": true}})
 
@@ -156,7 +157,7 @@ func TestHandleMode_PowerProfilectlFails(t *testing.T) {
 	pm := power.NewPowerManager()
 	pm.SetState(false, false, false, 0, false)
 	powerMon := power.NewPowerMonitor()
-	server := NewServer(pm, powerMon, "", nil, nil, nil, sysinfo.SystemInfo{})
+	server := NewServer(pm, powerMon, "", nil, nil, nil, nil, sysinfo.SystemInfo{})
 
 	withRunner(t, &fakeRunner{
 		available: map[string]bool{"powerprofilesctl": true},
@@ -199,7 +200,7 @@ func TestHandleMode_Invalid(t *testing.T) {
 	pm := power.NewPowerManager()
 	pm.SetState(false, false, false, 0, false)
 	powerMon := power.NewPowerMonitor()
-	server := NewServer(pm, powerMon, "", nil, nil, nil, sysinfo.SystemInfo{})
+	server := NewServer(pm, powerMon, "", nil, nil, nil, nil, sysinfo.SystemInfo{})
 
 	req := ModeRequest{Mode: "invalid"}
 	body, _ := json.Marshal(req)
@@ -219,7 +220,7 @@ func TestHandleMode_WrongMethod(t *testing.T) {
 	pm := power.NewPowerManager()
 	pm.SetState(false, false, false, 0, false)
 	powerMon := power.NewPowerMonitor()
-	server := NewServer(pm, powerMon, "", nil, nil, nil, sysinfo.SystemInfo{})
+	server := NewServer(pm, powerMon, "", nil, nil, nil, nil, sysinfo.SystemInfo{})
 
 	httpReq := httptest.NewRequest(http.MethodGet, "/mode", nil)
 	w := httptest.NewRecorder()
@@ -235,7 +236,7 @@ func TestHandleActivity(t *testing.T) {
 	pm := power.NewPowerManager()
 	pm.SetState(false, false, false, 0, false)
 	powerMon := power.NewPowerMonitor()
-	server := NewServer(pm, powerMon, "", nil, nil, nil, sysinfo.SystemInfo{})
+	server := NewServer(pm, powerMon, "", nil, nil, nil, nil, sysinfo.SystemInfo{})
 
 	httpReq := httptest.NewRequest(http.MethodPost, "/activity", nil)
 	w := httptest.NewRecorder()
@@ -258,7 +259,7 @@ func TestHandleActivity_WrongMethod(t *testing.T) {
 	pm := power.NewPowerManager()
 	pm.SetState(false, false, false, 0, false)
 	powerMon := power.NewPowerMonitor()
-	server := NewServer(pm, powerMon, "", nil, nil, nil, sysinfo.SystemInfo{})
+	server := NewServer(pm, powerMon, "", nil, nil, nil, nil, sysinfo.SystemInfo{})
 
 	httpReq := httptest.NewRequest(http.MethodGet, "/activity", nil)
 	w := httptest.NewRecorder()
@@ -274,7 +275,7 @@ func TestHandleSmartdStats_NotEnabled(t *testing.T) {
 	pm := power.NewPowerManager()
 	pm.SetState(false, false, false, 0, false)
 	powerMon := power.NewPowerMonitor()
-	server := NewServer(pm, powerMon, "", nil, nil, nil, sysinfo.SystemInfo{})
+	server := NewServer(pm, powerMon, "", nil, nil, nil, nil, sysinfo.SystemInfo{})
 
 	httpReq := httptest.NewRequest(http.MethodGet, "/smartd/stats", nil)
 	w := httptest.NewRecorder()
@@ -298,7 +299,7 @@ func TestHandleSmartdStats_WithMonitor(t *testing.T) {
 	}
 	smartdMon := smartd.NewMonitor(smartdCfg)
 
-	server := NewServer(pm, powerMon, "", smartdMon, nil, nil, sysinfo.SystemInfo{})
+	server := NewServer(pm, powerMon, "", smartdMon, nil, nil, nil, sysinfo.SystemInfo{})
 
 	httpReq := httptest.NewRequest(http.MethodGet, "/smartd/stats", nil)
 	w := httptest.NewRecorder()
@@ -321,7 +322,7 @@ func TestAuthMiddleware_NoSecret(t *testing.T) {
 	pm := power.NewPowerManager()
 	pm.SetState(false, false, false, 0, false)
 	powerMon := power.NewPowerMonitor()
-	server := NewServer(pm, powerMon, "", nil, nil, nil, sysinfo.SystemInfo{})
+	server := NewServer(pm, powerMon, "", nil, nil, nil, nil, sysinfo.SystemInfo{})
 
 	handler := server.AuthMiddleware(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
@@ -341,7 +342,7 @@ func TestAuthMiddleware_WithSecret_NoToken(t *testing.T) {
 	pm := power.NewPowerManager()
 	pm.SetState(false, false, false, 0, false)
 	powerMon := power.NewPowerMonitor()
-	server := NewServer(pm, powerMon, "secret", nil, nil, nil, sysinfo.SystemInfo{})
+	server := NewServer(pm, powerMon, "secret", nil, nil, nil, nil, sysinfo.SystemInfo{})
 
 	handler := server.AuthMiddleware(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
@@ -361,7 +362,7 @@ func TestAuthMiddleware_WithSecret_InvalidToken(t *testing.T) {
 	pm := power.NewPowerManager()
 	pm.SetState(false, false, false, 0, false)
 	powerMon := power.NewPowerMonitor()
-	server := NewServer(pm, powerMon, "secret", nil, nil, nil, sysinfo.SystemInfo{})
+	server := NewServer(pm, powerMon, "secret", nil, nil, nil, nil, sysinfo.SystemInfo{})
 
 	handler := server.AuthMiddleware(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
@@ -382,7 +383,7 @@ func TestAuthMiddleware_WithSecret_ValidToken(t *testing.T) {
 	pm := power.NewPowerManager()
 	pm.SetState(false, false, false, 0, false)
 	powerMon := power.NewPowerMonitor()
-	server := NewServer(pm, powerMon, "secret", nil, nil, nil, sysinfo.SystemInfo{})
+	server := NewServer(pm, powerMon, "secret", nil, nil, nil, nil, sysinfo.SystemInfo{})
 
 	handler := server.AuthMiddleware(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
@@ -417,7 +418,7 @@ func TestHandleStatus_IncludesIsGameRunning(t *testing.T) {
 	pm := power.NewPowerManager()
 	pm.SetState(true, false, true, 4242, false) // idle, not RP, game running, pid 4242, not paused
 	powerMon := power.NewPowerMonitor()
-	server := NewServer(pm, powerMon, "", nil, nil, nil, sysinfo.SystemInfo{})
+	server := NewServer(pm, powerMon, "", nil, nil, nil, nil, sysinfo.SystemInfo{})
 
 	httpReq := httptest.NewRequest(http.MethodGet, "/status", nil)
 	w := httptest.NewRecorder()
@@ -453,7 +454,7 @@ func TestRateLimit_BurstExceeded(t *testing.T) {
 	pm := power.NewPowerManager()
 	pm.SetState(false, false, false, 0, false)
 	powerMon := power.NewPowerMonitor()
-	server := NewServer(pm, powerMon, "", nil, nil, nil, sysinfo.SystemInfo{})
+	server := NewServer(pm, powerMon, "", nil, nil, nil, nil, sysinfo.SystemInfo{})
 
 	called := 0
 	handler := server.RateLimit(func(w http.ResponseWriter, r *http.Request) {
@@ -493,7 +494,7 @@ func TestHandleStatus_NilMonitors(t *testing.T) {
 	pm := power.NewPowerManager()
 	pm.SetState(false, false, false, 0, false)
 	powerMon := power.NewPowerMonitor()
-	server := NewServer(pm, powerMon, "", nil, nil, nil, sysinfo.SystemInfo{})
+	server := NewServer(pm, powerMon, "", nil, nil, nil, nil, sysinfo.SystemInfo{})
 
 	req := httptest.NewRequest(http.MethodGet, "/status", nil)
 	w := httptest.NewRecorder()
@@ -506,7 +507,7 @@ func TestHandleStatus_NilMonitors(t *testing.T) {
 
 // TestHandleStatus_WrongMethod verifies HandleStatus rejects non-GET.
 func TestHandleStatus_WrongMethod(t *testing.T) {
-	server := NewServer(power.NewPowerManager(), power.NewPowerMonitor(), "", nil, nil, nil, sysinfo.SystemInfo{})
+	server := NewServer(power.NewPowerManager(), power.NewPowerMonitor(), "", nil, nil, nil, nil, sysinfo.SystemInfo{})
 	req := httptest.NewRequest(http.MethodPost, "/status", nil)
 	w := httptest.NewRecorder()
 	server.HandleStatus(w, req)
@@ -517,7 +518,7 @@ func TestHandleStatus_WrongMethod(t *testing.T) {
 
 // TestHandleSmartdStats_WrongMethod verifies the endpoint rejects non-GET.
 func TestHandleSmartdStats_WrongMethod(t *testing.T) {
-	server := NewServer(power.NewPowerManager(), power.NewPowerMonitor(), "", nil, nil, nil, sysinfo.SystemInfo{})
+	server := NewServer(power.NewPowerManager(), power.NewPowerMonitor(), "", nil, nil, nil, nil, sysinfo.SystemInfo{})
 	req := httptest.NewRequest(http.MethodPost, "/smartd/stats", nil)
 	w := httptest.NewRecorder()
 	server.HandleSmartdStats(w, req)
@@ -529,7 +530,7 @@ func TestHandleSmartdStats_WrongMethod(t *testing.T) {
 // TestAuthMiddleware_UnauthorizedClaim verifies S6: a token with authorized=false
 // is rejected.
 func TestAuthMiddleware_UnauthorizedClaim(t *testing.T) {
-	server := NewServer(power.NewPowerManager(), power.NewPowerMonitor(), "secret", nil, nil, nil, sysinfo.SystemInfo{})
+	server := NewServer(power.NewPowerManager(), power.NewPowerMonitor(), "secret", nil, nil, nil, nil, sysinfo.SystemInfo{})
 
 	// Generate a token with authorized=false
 	claims := jwt.MapClaims{
@@ -556,7 +557,7 @@ func TestAuthMiddleware_UnauthorizedClaim(t *testing.T) {
 // TestAuthMiddleware_NonBearerScheme verifies S7: a non-Bearer Authorization
 // header is rejected.
 func TestAuthMiddleware_NonBearerScheme(t *testing.T) {
-	server := NewServer(power.NewPowerManager(), power.NewPowerMonitor(), "secret", nil, nil, nil, sysinfo.SystemInfo{})
+	server := NewServer(power.NewPowerManager(), power.NewPowerMonitor(), "secret", nil, nil, nil, nil, sysinfo.SystemInfo{})
 
 	handler := server.AuthMiddleware(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
@@ -577,7 +578,7 @@ func TestAuthMiddleware_NonBearerScheme(t *testing.T) {
 func TestHandleHealth(t *testing.T) {
 	pm := power.NewPowerManager()
 	powerMon := power.NewPowerMonitor()
-	server := NewServer(pm, powerMon, "secret", nil, nil, nil, sysinfo.SystemInfo{DaemonVersion: "1.5.0"})
+	server := NewServer(pm, powerMon, "secret", nil, nil, nil, nil, sysinfo.SystemInfo{DaemonVersion: "1.6.0"})
 
 	req := httptest.NewRequest(http.MethodGet, "/healthz", nil)
 	w := httptest.NewRecorder()
@@ -594,8 +595,8 @@ func TestHandleHealth(t *testing.T) {
 	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("invalid json: %v", err)
 	}
-	if resp.Version != "1.5.0" {
-		t.Errorf("version = %q, want 1.5.0", resp.Version)
+	if resp.Version != "1.6.0" {
+		t.Errorf("version = %q, want 1.6.0", resp.Version)
 	}
 	if resp.Status != "ok" {
 		t.Errorf("status = %q, want ok during the startup grace period", resp.Status)
@@ -606,6 +607,9 @@ func TestHandleHealth(t *testing.T) {
 	if resp.Monitors.Smartd || resp.Monitors.GPU {
 		t.Errorf("optional monitors should be disabled, got %+v", resp.Monitors)
 	}
+	if resp.Monitors.LLM != "disabled" {
+		t.Errorf("llm = %q, want disabled", resp.Monitors.LLM)
+	}
 	if resp.MetricsState.Enabled {
 		t.Error("metrics persistence should be disabled without a state path")
 	}
@@ -614,9 +618,40 @@ func TestHandleHealth(t *testing.T) {
 	}
 }
 
+// TestHealthStatus pins the degradation policy, including the LLM monitor.
+func TestHealthStatus(t *testing.T) {
+	tests := []struct {
+		name       string
+		turbostat  string
+		uptime     time.Duration
+		metricsErr string
+		llmHealth  string
+		nvmeHealth string
+		want       string
+	}{
+		{"all healthy", "ok", time.Minute, "", "ok", nvme.HealthOK, "ok"},
+		{"turbostat waiting during grace", "waiting", 10 * time.Second, "", "waiting", "disabled", "ok"},
+		{"turbostat waiting after grace", "waiting", time.Minute, "", "waiting", "disabled", "degraded"},
+		{"turbostat stale", "stale", time.Minute, "", "ok", "disabled", "degraded"},
+		{"metrics error", "ok", time.Minute, "disk full", "ok", "disabled", "degraded"},
+		{"llm error", "ok", time.Minute, "", "error", "disabled", "degraded"},
+		{"llm waiting", "ok", time.Minute, "", "waiting", "disabled", "ok"},
+		{"nvme warning", "ok", time.Minute, "", "ok", "warning", "degraded"},
+		{"nvme disabled", "ok", time.Minute, "", "ok", "disabled", "ok"},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := healthStatus(tc.turbostat, tc.uptime, tc.metricsErr, tc.llmHealth, tc.nvmeHealth); got != tc.want {
+				t.Errorf("healthStatus() = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
 // TestHandleHealth_WrongMethod verifies /healthz rejects non-GET.
 func TestHandleHealth_WrongMethod(t *testing.T) {
-	server := NewServer(power.NewPowerManager(), power.NewPowerMonitor(), "", nil, nil, nil, sysinfo.SystemInfo{})
+	server := NewServer(power.NewPowerManager(), power.NewPowerMonitor(), "", nil, nil, nil, nil, sysinfo.SystemInfo{})
 	req := httptest.NewRequest(http.MethodPost, "/healthz", nil)
 	w := httptest.NewRecorder()
 	server.HandleHealth(w, req)
@@ -630,7 +665,7 @@ func TestHandleHealth_WrongMethod(t *testing.T) {
 func TestHandleStatus_IncludesLifetimeEnergy(t *testing.T) {
 	pm := power.NewPowerManager()
 	powerMon := power.NewPowerMonitor()
-	server := NewServer(pm, powerMon, "", nil, nil, nil, sysinfo.SystemInfo{})
+	server := NewServer(pm, powerMon, "", nil, nil, nil, nil, sysinfo.SystemInfo{})
 
 	req := httptest.NewRequest(http.MethodGet, "/status", nil)
 	w := httptest.NewRecorder()
@@ -652,7 +687,7 @@ func TestHandleStatus_IncludesLifetimeEnergy(t *testing.T) {
 // TestRateLimit_PerHostNotPerConnection verifies the limiter keys on the
 // client IP, not the ephemeral source port.
 func TestRateLimit_PerHostNotPerConnection(t *testing.T) {
-	server := NewServer(power.NewPowerManager(), power.NewPowerMonitor(), "", nil, nil, nil, sysinfo.SystemInfo{})
+	server := NewServer(power.NewPowerManager(), power.NewPowerMonitor(), "", nil, nil, nil, nil, sysinfo.SystemInfo{})
 
 	called := 0
 	handler := server.RateLimit(func(w http.ResponseWriter, r *http.Request) {
@@ -684,7 +719,7 @@ func TestRateLimit_PerHostNotPerConnection(t *testing.T) {
 
 // TestHandleStatus_IncludesMemory verifies the dynamic memory block is exposed.
 func TestHandleStatus_IncludesMemory(t *testing.T) {
-	server := NewServer(power.NewPowerManager(), power.NewPowerMonitor(), "", nil, nil, nil, sysinfo.SystemInfo{})
+	server := NewServer(power.NewPowerManager(), power.NewPowerMonitor(), "", nil, nil, nil, nil, sysinfo.SystemInfo{})
 
 	req := httptest.NewRequest(http.MethodGet, "/status", nil)
 	w := httptest.NewRecorder()
@@ -711,7 +746,7 @@ func TestHandleStatus_IncludesMemory(t *testing.T) {
 // TestHandleHealth_IncludesMemory verifies the health payload carries the
 // memory pressure value.
 func TestHandleHealth_IncludesMemory(t *testing.T) {
-	server := NewServer(power.NewPowerManager(), power.NewPowerMonitor(), "", nil, nil, nil, sysinfo.SystemInfo{})
+	server := NewServer(power.NewPowerManager(), power.NewPowerMonitor(), "", nil, nil, nil, nil, sysinfo.SystemInfo{})
 
 	req := httptest.NewRequest(http.MethodGet, "/healthz", nil)
 	w := httptest.NewRecorder()
@@ -727,7 +762,7 @@ func TestHandleHealth_IncludesMemory(t *testing.T) {
 }
 
 func TestHandleNVMeStats_NotEnabled(t *testing.T) {
-	server := NewServer(power.NewPowerManager(), power.NewPowerMonitor(), "", nil, nil, nil, sysinfo.SystemInfo{})
+	server := NewServer(power.NewPowerManager(), power.NewPowerMonitor(), "", nil, nil, nil, nil, sysinfo.SystemInfo{})
 	req := httptest.NewRequest(http.MethodGet, "/nvme/stats", nil)
 	w := httptest.NewRecorder()
 	server.HandleNVMeStats(w, req)
@@ -738,7 +773,7 @@ func TestHandleNVMeStats_NotEnabled(t *testing.T) {
 
 func TestHandleNVMeStats_WithMonitor(t *testing.T) {
 	nvmeMon := nvme.NewMonitor(config.NVMeConfig{Enabled: true, PollInterval: "15m"})
-	server := NewServer(power.NewPowerManager(), power.NewPowerMonitor(), "", nil, nvmeMon, nil, sysinfo.SystemInfo{})
+	server := NewServer(power.NewPowerManager(), power.NewPowerMonitor(), "", nil, nvmeMon, nil, nil, sysinfo.SystemInfo{})
 
 	req := httptest.NewRequest(http.MethodGet, "/nvme/stats", nil)
 	w := httptest.NewRecorder()
@@ -757,7 +792,7 @@ func TestHandleNVMeStats_WithMonitor(t *testing.T) {
 }
 
 func TestHandleNVMeStats_WrongMethod(t *testing.T) {
-	server := NewServer(power.NewPowerManager(), power.NewPowerMonitor(), "", nil, nil, nil, sysinfo.SystemInfo{})
+	server := NewServer(power.NewPowerManager(), power.NewPowerMonitor(), "", nil, nil, nil, nil, sysinfo.SystemInfo{})
 	req := httptest.NewRequest(http.MethodPost, "/nvme/stats", nil)
 	w := httptest.NewRecorder()
 	server.HandleNVMeStats(w, req)
@@ -767,7 +802,7 @@ func TestHandleNVMeStats_WrongMethod(t *testing.T) {
 }
 
 func TestHandleHealth_NVMeDisabled(t *testing.T) {
-	server := NewServer(power.NewPowerManager(), power.NewPowerMonitor(), "", nil, nil, nil, sysinfo.SystemInfo{})
+	server := NewServer(power.NewPowerManager(), power.NewPowerMonitor(), "", nil, nil, nil, nil, sysinfo.SystemInfo{})
 	req := httptest.NewRequest(http.MethodGet, "/healthz", nil)
 	w := httptest.NewRecorder()
 	server.HandleHealth(w, req)
@@ -783,7 +818,7 @@ func TestHandleHealth_NVMeDisabled(t *testing.T) {
 
 func TestHandleStatus_IncludesNVMe(t *testing.T) {
 	nvmeMon := nvme.NewMonitor(config.NVMeConfig{Enabled: true, PollInterval: "15m"})
-	server := NewServer(power.NewPowerManager(), power.NewPowerMonitor(), "", nil, nvmeMon, nil, sysinfo.SystemInfo{})
+	server := NewServer(power.NewPowerManager(), power.NewPowerMonitor(), "", nil, nvmeMon, nil, nil, sysinfo.SystemInfo{})
 
 	req := httptest.NewRequest(http.MethodGet, "/status", nil)
 	w := httptest.NewRecorder()
@@ -804,7 +839,7 @@ func TestHandleStatus_ModeTunableAndHealth(t *testing.T) {
 	pm := power.NewPowerManager()
 	pm.SetState(false, false, false, 0, false)
 	powerMon := power.NewPowerMonitor()
-	server := NewServer(pm, powerMon, "", nil, nil, nil, sysinfo.SystemInfo{})
+	server := NewServer(pm, powerMon, "", nil, nil, nil, nil, sysinfo.SystemInfo{})
 
 	withRunner(t, &fakeRunner{available: map[string]bool{"powerprofilesctl": true}})
 	if err := pm.SetPerformance("test"); err != nil {
@@ -834,5 +869,62 @@ func TestHandleStatus_ModeTunableAndHealth(t *testing.T) {
 	}
 	if _, ok := health["monitors"]; !ok {
 		t.Error("health.monitors missing")
+	}
+}
+
+func TestHandleLLMStats_NotEnabled(t *testing.T) {
+	server := NewServer(power.NewPowerManager(), power.NewPowerMonitor(), "", nil, nil, nil, nil, sysinfo.SystemInfo{})
+	req := httptest.NewRequest(http.MethodGet, "/llm/stats", nil)
+	w := httptest.NewRecorder()
+	server.HandleLLMStats(w, req)
+	if w.Code != http.StatusNotFound {
+		t.Errorf("got %d, want 404", w.Code)
+	}
+}
+
+func TestHandleLLMStats_WithMonitor(t *testing.T) {
+	llmMon := llm.NewMonitor(config.LLMConfig{Enabled: true, AccessLog: "/tmp/x.log"}, config.PricingConfig{})
+	server := NewServer(power.NewPowerManager(), power.NewPowerMonitor(), "", nil, nil, llmMon, nil, sysinfo.SystemInfo{})
+
+	req := httptest.NewRequest(http.MethodGet, "/llm/stats", nil)
+	w := httptest.NewRecorder()
+	server.HandleLLMStats(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("got %d, want 200", w.Code)
+	}
+
+	var resp llm.Stats
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("invalid json: %v", err)
+	}
+	if !resp.Enabled {
+		t.Error("expected enabled LLM stats")
+	}
+}
+
+func TestHandleLLMStats_WrongMethod(t *testing.T) {
+	server := NewServer(power.NewPowerManager(), power.NewPowerMonitor(), "", nil, nil, nil, nil, sysinfo.SystemInfo{})
+	req := httptest.NewRequest(http.MethodPost, "/llm/stats", nil)
+	w := httptest.NewRecorder()
+	server.HandleLLMStats(w, req)
+	if w.Code != http.StatusMethodNotAllowed {
+		t.Errorf("got %d, want 405", w.Code)
+	}
+}
+
+func TestHandleStatus_IncludesLLM(t *testing.T) {
+	llmMon := llm.NewMonitor(config.LLMConfig{Enabled: true, AccessLog: "/tmp/x.log"}, config.PricingConfig{})
+	server := NewServer(power.NewPowerManager(), power.NewPowerMonitor(), "", nil, nil, llmMon, nil, sysinfo.SystemInfo{})
+
+	req := httptest.NewRequest(http.MethodGet, "/status", nil)
+	w := httptest.NewRecorder()
+	server.HandleStatus(w, req)
+
+	var resp map[string]any
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("invalid json: %v", err)
+	}
+	if _, ok := resp["llm"]; !ok {
+		t.Fatal("llm block missing from status response")
 	}
 }

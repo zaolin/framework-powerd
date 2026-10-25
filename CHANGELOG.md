@@ -4,6 +4,46 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 semantic versioning.
 
+## [1.6.0] - 2026-10-21
+
+### Added
+
+- LLM request accounting in `internal/llm`: a Caddy JSON access log is tailed
+  and requests are attributed to client IPs and IP groups.
+- `llm` and `pricing` configuration sections with validation, including IP
+  groups, excluded IPs, counted paths, history length and persistence.
+- `GET /llm/stats` and the `llm` block in `GET /status`.
+- `/healthz` reports `monitors.llm` as `ok`, `waiting`, `error` or `disabled`.
+- Home Assistant entities for LLM requests (total, today), per-group counts and
+  shares, per-IP counts, today's energy and cost, plus the daily history as an
+  attribute.
+- Caddy snippet `configs/caddy/llm` that proxies `llama-server` and writes a
+  rotating JSON access log with credentials stripped. The public listen port
+  and the loopback upstream port are separate and can be overridden with
+  `LLM_PORT`, `LLM_UPSTREAM` and `LLM_LOG`.
+- `docs/llm.md` describing the setup, configuration and troubleshooting.
+
+### Fixed
+
+- A missing access log is no longer reported as an error. `/healthz` now shows
+  `monitors.llm` as `waiting` until the proxy creates the file, and a previously
+  recorded read error is cleared once reading succeeds.
+- Restarting the daemon no longer re-reads the whole access log: the log
+  position is persisted with the counters, and day buckets use the log
+  timestamp instead of the processing time.
+- The accounting snapshot is a deep copy, so the HTTP handlers and the
+  persistence loop can no longer race the polling goroutine.
+- `history_days` keeps exactly that many days including today.
+- Home Assistant energy and cost use the daily buckets, the cost sensor reports
+  the configured currency, and group and client-IP entities are added as
+  clients appear rather than only at setup.
+- Per-IP counters now follow the retention window instead of growing forever,
+  and the integration caps the number of per-IP sensors.
+- Configuration validation rejects a negative `history_days`, empty
+  `counted_paths`, a negative energy price, a currency that is not a
+  three-letter ISO 4217 code, and
+  group names that only differ in case.
+
 ## [1.5.0] - 2026-10-19
 
 ### Added

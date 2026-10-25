@@ -120,6 +120,28 @@ Only present when `nvme.enabled` is true and devices are detected.
 diagnose why per-device sensors are missing (for example `nvme`/`smartctl` not
 installed or no access to `/dev/nvme*`).
 
+### LLM requests
+
+Only present when `llm.enabled` is true.
+
+| Entity | Unit | Source |
+|---|---|---|
+| LLM Requests (Total) | count | `llm.total.count` |
+| LLM Requests Today | count | `llm.today.total` |
+| LLM Energy Today | kWh | `llm.today.total_energy_kwh` |
+| LLM Cost Today | currency | `llm.today.total_cost` |
+| LLM `<group>` Requests Today | count | `llm.today.by_group` |
+| LLM `<group>` Requests Today Share | % | group share of today |
+| LLM `<ip>` Requests Today | count | `llm.today.by_ip` |
+
+Group and client-IP entities are created as those clients first appear, without
+reloading the integration. The share of today's requests for a single IP is the
+`percent` attribute of its sensor, and the integration creates at most 25 per-IP
+sensors; the full per-IP data stays in the `by_ip` attribute of the today
+sensor. The daily history is exposed as the
+`history` attribute of the total and today sensors, so it can be graphed
+without extra entities. See [LLM Request Accounting](llm.md).
+
 ### Storage health
 
 | Entity | Type | Meaning |
@@ -198,6 +220,10 @@ entities:
   - sensor.cpu_usage
   - sensor.daemon_health
   - sensor.nvme_status
+  - sensor.llm_requests_total
+  - sensor.llm_requests_today
+  - sensor.llm_energy_today
+  - sensor.llm_cost_today
   - select.framework_power_daemon_power_tunable_mode
   - button.framework_power_daemon_reset_idle_timer
   - binary_sensor.storage_health

@@ -1,4 +1,5 @@
 """Sensor platform for Framework Power Daemon."""
+
 from homeassistant.components.sensor import (
     SensorDeviceClass,
     SensorEntity,
@@ -75,6 +76,13 @@ async def async_setup_entry(
             entities.extend(cls(coord, name) for cls in NVME_SENSOR_CLASSES)
         return entities
 
+    # LLM request accounting sensors. Group and client-IP entities appear as
+    # sources show up, so the factory keeps running and emits only new ones.
+    _llm_registered: set[tuple[str, str]] = set()
+
+    def _llm_entities(coord):
+        return build_llm_entities(coord, _llm_registered)
+
     # Add SMART sensors
     entities.append(SmartdAlertsSensor(coordinator))
 
@@ -103,13 +111,20 @@ async def async_setup_entry(
     # Add system info sensors (always present — static data from /status)
     sysinfo_data = coordinator.data.get("system_info", {})
     if sysinfo_data:
-        entities.extend([
-            KernelVersionSensor(coordinator),
-            OSSensor(coordinator),
-            CPUModelSensor(coordinator),
-            TotalRAMSensor(coordinator),
-            DaemonVersionSensor(coordinator),
-        ])
+        entities.extend(
+            [
+                KernelVersionSensor(coordinator),
+                OSSensor(coordinator),
+                CPUModelSensor(coordinator),
+                TotalRAMSensor(coordinator),
+                DaemonVersionSensor(coordinator),
+            ]
+        )
+
+    # Add LLM request accounting sensors
+    llm_data = coordinator.data.get("llm", {})
+    if llm_data:
+        entities.extend(_llm_entities(coordinator))
 
     async_add_entities(entities)
 
@@ -130,18 +145,24 @@ async def async_setup_entry(
             return _nvme_entities(coord)
         return []
 
+    def _llm_sensors_factory(coord):
+        return _llm_entities(coord)
+
     if not memory_data:
         coordinator.register_entity_factory(_memory_sensors_factory)
     if not gpu_data:
         coordinator.register_entity_factory(_gpu_sensors_factory)
     if not nvme_data.get("devices"):
         coordinator.register_entity_factory(_nvme_sensors_factory)
+    coordinator.register_entity_factory(_llm_sensors_factory, persistent=True)
 
     # A11: register a dynamic factory so per-device SMART alert entities appear
     # when they first show up in coordinator data, even if they were absent at
     # setup time.
     _registered_smartd_devices: set[str] = set(
-        alert.get("device") for alert in smartd_data.get("alerts", []) if alert.get("device")
+        alert.get("device")
+        for alert in smartd_data.get("alerts", [])
+        if alert.get("device")
     )
 
     def _smartd_devices_factory(coord):
@@ -234,6 +255,7 @@ class EnergySensor(FrameworkEntity, SensorEntity):
 
 class LifetimeEnergySensor(FrameworkEntity, SensorEntity):
     """Total energy consumed since the metrics state was first persisted."""
+
     _attr_name = "Energy (Total)"
     _attr_unique_id = "energy_total"
     _attr_device_class = SensorDeviceClass.ENERGY
@@ -250,6 +272,7 @@ class LifetimeEnergySensor(FrameworkEntity, SensorEntity):
 
 class EstimatedTotalPowerSensor(FrameworkEntity, SensorEntity):
     """Estimated total system power: PkgWatt + peripherals + VRM correction."""
+
     _attr_name = "Estimated Total Power"
     _attr_unique_id = "power_estimated_total"
     _attr_device_class = SensorDeviceClass.POWER
@@ -267,6 +290,7 @@ class EstimatedTotalPowerSensor(FrameworkEntity, SensorEntity):
 
 class PeripheralPowerSensor(FrameworkEntity, SensorEntity):
     """Estimated peripheral power: USB + NVMe + fan + WiFi + Ethernet."""
+
     _attr_name = "Peripheral Power"
     _attr_unique_id = "power_peripheral"
     _attr_device_class = SensorDeviceClass.POWER
@@ -284,6 +308,7 @@ class PeripheralPowerSensor(FrameworkEntity, SensorEntity):
 
 class RAMUsedSensor(FrameworkEntity, SensorEntity):
     """RAM in use (MemTotal - MemAvailable)."""
+
     _attr_name = "RAM Used"
     _attr_unique_id = "ram_used"
     _attr_device_class = SensorDeviceClass.DATA_SIZE
@@ -300,6 +325,7 @@ class RAMUsedSensor(FrameworkEntity, SensorEntity):
 
 class RAMFreeSensor(FrameworkEntity, SensorEntity):
     """Literal MemFree from /proc/meminfo."""
+
     _attr_name = "RAM Free"
     _attr_unique_id = "ram_free"
     _attr_device_class = SensorDeviceClass.DATA_SIZE
@@ -316,6 +342,7 @@ class RAMFreeSensor(FrameworkEntity, SensorEntity):
 
 class RAMAvailableSensor(FrameworkEntity, SensorEntity):
     """MemAvailable: the kernel's estimate of memory available for new work."""
+
     _attr_name = "RAM Available"
     _attr_unique_id = "ram_available"
     _attr_device_class = SensorDeviceClass.DATA_SIZE
@@ -332,6 +359,7 @@ class RAMAvailableSensor(FrameworkEntity, SensorEntity):
 
 class RAMUsageSensor(FrameworkEntity, SensorEntity):
     """RAM usage percentage."""
+
     _attr_name = "RAM Usage"
     _attr_unique_id = "ram_usage"
     _attr_native_unit_of_measurement = "%"
@@ -346,8 +374,10 @@ class RAMUsageSensor(FrameworkEntity, SensorEntity):
 
 # SMART Sensors
 
+
 class SmartdAlertsSensor(FrameworkEntity, SensorEntity):
     """SMART alerts count sensor."""
+
     _attr_name = "SMART Alerts"
     _attr_icon = "mdi:alert"
     _attr_unique_id = "smartd_alerts_count"
@@ -364,6 +394,7 @@ class SmartdAlertsSensor(FrameworkEntity, SensorEntity):
 
 class SmartdDeviceSensor(FrameworkEntity, SensorEntity):
     """Per-device SMART alert sensor."""
+
     _attr_icon = "mdi:harddisk"
 
     def __init__(self, coordinator, device_name):
@@ -388,8 +419,10 @@ class SmartdDeviceSensor(FrameworkEntity, SensorEntity):
 
 # GPU Sensors
 
+
 class GPUTemperatureSensor(FrameworkEntity, SensorEntity):
     """GPU temperature sensor."""
+
     _attr_name = "GPU Temperature"
     _attr_unique_id = "gpu_temperature"
     _attr_device_class = SensorDeviceClass.TEMPERATURE
@@ -405,6 +438,7 @@ class GPUTemperatureSensor(FrameworkEntity, SensorEntity):
 
 class GPUPowerSensor(FrameworkEntity, SensorEntity):
     """GPU power sensor."""
+
     _attr_name = "GPU Power"
     _attr_unique_id = "gpu_power"
     _attr_device_class = SensorDeviceClass.POWER
@@ -420,6 +454,7 @@ class GPUPowerSensor(FrameworkEntity, SensorEntity):
 
 class GPUVRAMUsedSensor(FrameworkEntity, SensorEntity):
     """GPU VRAM used sensor."""
+
     _attr_name = "GPU VRAM Used"
     _attr_unique_id = "gpu_vram_used"
     _attr_device_class = SensorDeviceClass.DATA_SIZE
@@ -437,6 +472,7 @@ class GPUVRAMUsedSensor(FrameworkEntity, SensorEntity):
 
 class GPUVRAMTotalSensor(FrameworkEntity, SensorEntity):
     """GPU VRAM total sensor."""
+
     _attr_name = "GPU VRAM Total"
     _attr_unique_id = "gpu_vram_total"
     _attr_device_class = SensorDeviceClass.DATA_SIZE
@@ -454,6 +490,7 @@ class GPUVRAMTotalSensor(FrameworkEntity, SensorEntity):
 
 class GPUVRAMFreeSensor(FrameworkEntity, SensorEntity):
     """GPU VRAM free sensor."""
+
     _attr_name = "GPU VRAM Free"
     _attr_unique_id = "gpu_vram_free"
     _attr_device_class = SensorDeviceClass.DATA_SIZE
@@ -468,7 +505,8 @@ class GPUVRAMFreeSensor(FrameworkEntity, SensorEntity):
         free = gpu_data.get("vram_free_bytes")
         if free is None:
             free = max(
-                gpu_data.get("vram_total_bytes", 0) - gpu_data.get("vram_used_bytes", 0),
+                gpu_data.get("vram_total_bytes", 0)
+                - gpu_data.get("vram_used_bytes", 0),
                 0,
             )
         return round(free / (1024**3), 2)
@@ -476,6 +514,7 @@ class GPUVRAMFreeSensor(FrameworkEntity, SensorEntity):
 
 class GPUVRAMUsageSensor(FrameworkEntity, SensorEntity):
     """GPU VRAM usage percentage."""
+
     _attr_name = "GPU VRAM Usage"
     _attr_unique_id = "gpu_vram_usage"
     _attr_native_unit_of_measurement = "%"
@@ -496,6 +535,7 @@ class GPUVRAMUsageSensor(FrameworkEntity, SensorEntity):
 
 class GPUTTGUsedSensor(FrameworkEntity, SensorEntity):
     """GPU GTT used sensor."""
+
     _attr_name = "GPU GTT Used"
     _attr_unique_id = "gpu_gtt_used"
     _attr_device_class = SensorDeviceClass.DATA_SIZE
@@ -513,6 +553,7 @@ class GPUTTGUsedSensor(FrameworkEntity, SensorEntity):
 
 class GPUTTGTotalSensor(FrameworkEntity, SensorEntity):
     """GPU GTT total sensor."""
+
     _attr_name = "GPU GTT Total"
     _attr_unique_id = "gpu_gtt_total"
     _attr_device_class = SensorDeviceClass.DATA_SIZE
@@ -530,6 +571,7 @@ class GPUTTGTotalSensor(FrameworkEntity, SensorEntity):
 
 class GPUTTGFreeSensor(FrameworkEntity, SensorEntity):
     """GPU GTT free sensor."""
+
     _attr_name = "GPU GTT Free"
     _attr_unique_id = "gpu_gtt_free"
     _attr_device_class = SensorDeviceClass.DATA_SIZE
@@ -552,6 +594,7 @@ class GPUTTGFreeSensor(FrameworkEntity, SensorEntity):
 
 class GPUTTGUsageSensor(FrameworkEntity, SensorEntity):
     """GPU GTT usage percentage."""
+
     _attr_name = "GPU GTT Usage"
     _attr_unique_id = "gpu_gtt_usage"
     _attr_native_unit_of_measurement = "%"
@@ -572,6 +615,7 @@ class GPUTTGUsageSensor(FrameworkEntity, SensorEntity):
 
 class GPUCPUUsageSensor(FrameworkEntity, SensorEntity):
     """System CPU usage sensor."""
+
     _attr_name = "CPU Usage"
     _attr_unique_id = "cpu_usage"
     _attr_native_unit_of_measurement = "%"
@@ -586,6 +630,7 @@ class GPUCPUUsageSensor(FrameworkEntity, SensorEntity):
 
 
 # NVMe Sensors
+
 
 class NVMeDeviceSensor(FrameworkEntity, SensorEntity):
     """Base class for per-NVMe-device sensors."""
@@ -812,17 +857,265 @@ class DaemonHealthSensor(FrameworkEntity, SensorEntity):
             "turbostat": monitors.get("turbostat"),
             "smartd": monitors.get("smartd"),
             "nvme": monitors.get("nvme"),
+            "llm": monitors.get("llm"),
             "gpu": monitors.get("gpu"),
+            "llm_last_error": (self.coordinator.data.get("llm") or {}).get(
+                "last_error"
+            ),
             "power_sample_age_seconds": health.get("power_sample_age_seconds"),
             "memory_used_percent": health.get("memory_used_percent"),
             "metrics_state": health.get("metrics_state"),
         }
 
 
+# LLM Request Accounting Sensors
+
+
+class LLMSensorBase(FrameworkEntity, SensorEntity):
+    """Base class for LLM request accounting sensors."""
+
+    @property
+    def _llm(self):
+        return self.coordinator.data.get("llm") or {}
+
+    @property
+    def _today(self):
+        return self._llm.get("today") or {}
+
+    @property
+    def _history(self):
+        return self._llm.get("days") or []
+
+
+class LLMRequestsTotalSensor(LLMSensorBase):
+    """Total number of counted LLM requests since accounting state was created."""
+
+    _attr_name = "LLM Requests (Total)"
+    _attr_unique_id = "llm_requests_total"
+    _attr_state_class = SensorStateClass.TOTAL_INCREASING
+    _attr_icon = "mdi:message-processing"
+
+    @property
+    def native_value(self):
+        return self._llm.get("total", {}).get("count", 0)
+
+    @property
+    def extra_state_attributes(self):
+        total = self._llm.get("total", {})
+        return {
+            "total_duration_secs": total.get("total_duration_secs", 0),
+            "total_energy_kwh": total.get("total_energy_kwh", 0),
+            "total_cost": total.get("total_cost", 0),
+            "currency": self._llm.get("currency", ""),
+            "last_request": self._llm.get("last_request"),
+            "history": self._history,
+        }
+
+
+class LLMRequestsTodaySensor(LLMSensorBase):
+    """Number of counted LLM requests today (UTC)."""
+
+    _attr_name = "LLM Requests Today"
+    _attr_unique_id = "llm_requests_today"
+    _attr_state_class = SensorStateClass.TOTAL_INCREASING
+    _attr_icon = "mdi:calendar-today"
+
+    @property
+    def native_value(self):
+        return self._today.get("total", 0)
+
+    @property
+    def extra_state_attributes(self):
+        return {
+            "date": self._today.get("date"),
+            "by_ip": self._today.get("by_ip", {}),
+            "by_group": self._today.get("by_group", {}),
+            "history": self._history,
+        }
+
+
+class LLMEnergyTodaySensor(LLMSensorBase):
+    """Energy attributed to today's LLM requests."""
+
+    _attr_name = "LLM Energy Today"
+    _attr_unique_id = "llm_energy_today"
+    _attr_device_class = SensorDeviceClass.ENERGY
+    _attr_native_unit_of_measurement = UnitOfEnergy.KILO_WATT_HOUR
+    _attr_state_class = SensorStateClass.TOTAL
+    _attr_suggested_display_precision = 4
+    _attr_icon = "mdi:lightning-bolt"
+
+    @property
+    def native_value(self):
+        return round(self._today.get("total_energy_kwh", 0), 4)
+
+
+class LLMCostTodaySensor(LLMSensorBase):
+    """Cost attributed to today's LLM requests."""
+
+    _attr_name = "LLM Cost Today"
+    _attr_unique_id = "llm_cost_today"
+    _attr_device_class = SensorDeviceClass.MONETARY
+    _attr_state_class = SensorStateClass.TOTAL
+    _attr_suggested_display_precision = 4
+    _attr_icon = "mdi:cash"
+
+    @property
+    def native_value(self):
+        return round(self._today.get("total_cost", 0), 4)
+
+    @property
+    def native_unit_of_measurement(self):
+        return self._llm.get("currency") or None
+
+    @property
+    def extra_state_attributes(self):
+        return {
+            "currency": self._llm.get("currency", ""),
+            "price_per_kwh": self._llm.get("price_per_kwh", 0),
+            "total_cost": self._llm.get("total", {}).get("total_cost", 0),
+        }
+
+
+class LLMGroupRequestsSensor(LLMSensorBase):
+    """Requests today for one IP group."""
+
+    _attr_state_class = SensorStateClass.TOTAL_INCREASING
+    _attr_icon = "mdi:account-group"
+
+    def __init__(self, coordinator, group):
+        super().__init__(coordinator)
+        self._group = group
+        self._attr_name = f"LLM {group.title()} Requests Today"
+        self._attr_unique_id = f"llm_group_{group}_requests"
+
+    @property
+    def native_value(self):
+        return self._today.get("by_group", {}).get(self._group, 0)
+
+    @property
+    def extra_state_attributes(self):
+        return {"group": self._group, "date": self._today.get("date")}
+
+
+class LLMGroupPercentSensor(LLMSensorBase):
+    """Share of today's requests attributed to one IP group."""
+
+    _attr_native_unit_of_measurement = "%"
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_suggested_display_precision = 1
+    _attr_icon = "mdi:chart-donut"
+
+    def __init__(self, coordinator, group):
+        super().__init__(coordinator)
+        self._group = group
+        self._attr_name = f"LLM {group.title()} Requests Today Share"
+        self._attr_unique_id = f"llm_group_{group}_percent"
+
+    @property
+    def native_value(self):
+        total = self._today.get("total", 0)
+        if not total:
+            return 0
+        count = self._today.get("by_group", {}).get(self._group, 0)
+        return round(count / total * 100, 1)
+
+    @property
+    def extra_state_attributes(self):
+        return {
+            "group": self._group,
+            "date": self._today.get("date"),
+            "requests": self._today.get("by_group", {}).get(self._group, 0),
+            "total_requests": self._today.get("total", 0),
+        }
+
+
+class LLMIPRequestsSensor(LLMSensorBase):
+    """Requests today from one client IP."""
+
+    _attr_state_class = SensorStateClass.TOTAL_INCREASING
+    _attr_icon = "mdi:ip-network"
+
+    def __init__(self, coordinator, ip):
+        super().__init__(coordinator)
+        self._ip = ip
+        self._attr_name = f"LLM {ip} Requests Today"
+        self._attr_unique_id = f"llm_ip_{ip.replace('.', '_').replace(':', '_')}"
+
+    @property
+    def native_value(self):
+        return self._today.get("by_ip", {}).get(self._ip, 0)
+
+    @property
+    def extra_state_attributes(self):
+        total = self._today.get("total", 0)
+        count = self._today.get("by_ip", {}).get(self._ip, 0)
+        percent = round(count / total * 100, 1) if total else 0
+        return {
+            "ip": self._ip,
+            "date": self._today.get("date"),
+            "requests": count,
+            "percent": percent,
+        }
+
+
+# Upper bound on per-IP sensors. Client addresses are unbounded in principle
+# (DHCP churn, IPv6 privacy addresses), so the integration caps how many
+# entity rows it creates. The full per-IP data stays in the attributes.
+MAX_LLM_IP_SENSORS = 25
+
+
+def build_llm_entities(coord, registered):
+    """Return the LLM sensors that have not been created yet.
+
+    registered holds the (kind, name) pairs already added and is updated in
+    place, so this can be used as a persistent entity factory: a group or a
+    client that shows up later gets its entities without a reload.
+    """
+    llm = (coord.data or {}).get("llm")
+    if not llm:
+        return []
+
+    new = []
+    if ("base", "") not in registered:
+        registered.add(("base", ""))
+        new.extend(
+            [
+                LLMRequestsTotalSensor(coord),
+                LLMRequestsTodaySensor(coord),
+                LLMEnergyTodaySensor(coord),
+                LLMCostTodaySensor(coord),
+            ]
+        )
+
+    for group in llm.get("by_group") or {}:
+        key = ("group", group)
+        if key in registered:
+            continue
+        registered.add(key)
+        new.append(LLMGroupRequestsSensor(coord, group))
+        new.append(LLMGroupPercentSensor(coord, group))
+
+    ip_count = sum(1 for kind, _ in registered if kind == "ip")
+    for ip in llm.get("by_ip") or {}:
+        if ip_count >= MAX_LLM_IP_SENSORS:
+            break
+        key = ("ip", ip)
+        if key in registered:
+            continue
+        registered.add(key)
+        ip_count += 1
+        new.append(LLMIPRequestsSensor(coord, ip))
+
+    return new
+
+
 # System Info Sensors
+
 
 class KernelVersionSensor(FrameworkEntity, SensorEntity):
     """Kernel version sensor."""
+
     _attr_name = "Kernel Version"
     _attr_unique_id = "kernel_version"
     _attr_entity_category = EntityCategory.DIAGNOSTIC
@@ -830,11 +1123,14 @@ class KernelVersionSensor(FrameworkEntity, SensorEntity):
 
     @property
     def native_value(self):
-        return self.coordinator.data.get("system_info", {}).get("kernel_version", "Unknown")
+        return self.coordinator.data.get("system_info", {}).get(
+            "kernel_version", "Unknown"
+        )
 
 
 class OSSensor(FrameworkEntity, SensorEntity):
     """Operating system sensor — shows 'Name Version' (e.g. 'Gentoo 2.18')."""
+
     _attr_name = "Operating System"
     _attr_unique_id = "operating_system"
     _attr_entity_category = EntityCategory.DIAGNOSTIC
@@ -852,6 +1148,7 @@ class OSSensor(FrameworkEntity, SensorEntity):
 
 class CPUModelSensor(FrameworkEntity, SensorEntity):
     """CPU model name sensor."""
+
     _attr_name = "CPU Model"
     _attr_unique_id = "cpu_model"
     _attr_entity_category = EntityCategory.DIAGNOSTIC
@@ -869,6 +1166,7 @@ class CPUModelSensor(FrameworkEntity, SensorEntity):
 
 class TotalRAMSensor(FrameworkEntity, SensorEntity):
     """Total system RAM sensor."""
+
     _attr_name = "Total RAM"
     _attr_unique_id = "total_ram"
     _attr_entity_category = EntityCategory.DIAGNOSTIC
@@ -879,12 +1177,15 @@ class TotalRAMSensor(FrameworkEntity, SensorEntity):
 
     @property
     def native_value(self):
-        ram_bytes = self.coordinator.data.get("system_info", {}).get("total_ram_bytes", 0)
+        ram_bytes = self.coordinator.data.get("system_info", {}).get(
+            "total_ram_bytes", 0
+        )
         return round(ram_bytes / (1024**3), 2) if ram_bytes else 0
 
 
 class DaemonVersionSensor(FrameworkEntity, SensorEntity):
     """Daemon version sensor."""
+
     _attr_name = "Daemon Version"
     _attr_unique_id = "daemon_version"
     _attr_entity_category = EntityCategory.DIAGNOSTIC
@@ -892,5 +1193,6 @@ class DaemonVersionSensor(FrameworkEntity, SensorEntity):
 
     @property
     def native_value(self):
-        return self.coordinator.data.get("system_info", {}).get("daemon_version", "Unknown")
-
+        return self.coordinator.data.get("system_info", {}).get(
+            "daemon_version", "Unknown"
+        )

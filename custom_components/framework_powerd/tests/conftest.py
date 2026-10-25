@@ -1,4 +1,5 @@
 """Pytest configuration for Framework Power Daemon tests."""
+
 import sys
 import os
 
@@ -98,7 +99,7 @@ def mock_coordinator():
         },
         "health": {
             "status": "ok",
-            "version": "1.5.0",
+            "version": "1.6.0",
             "uptime_seconds": 1234.0,
             "is_idle": False,
             "power_sample_age_seconds": 1.0,
@@ -107,6 +108,7 @@ def mock_coordinator():
                 "turbostat": "ok",
                 "smartd": True,
                 "nvme": "ok",
+                "llm": "ok",
                 "gpu": True,
             },
             "metrics_state": {
@@ -122,7 +124,94 @@ def mock_coordinator():
             "cpu_model": "AMD Ryzen AI 7 350 w/ Radeon 860M",
             "cpu_count": 16,
             "total_ram_bytes": 48838284 * 1024,
-            "daemon_version": "1.5.0",
+            "daemon_version": "1.6.0",
+        },
+        "llm": {
+            "enabled": True,
+            "since": "2026-01-01T00:00:00Z",
+            "total": {
+                "count": 120,
+                "total_duration_secs": 3600.5,
+                "total_energy_kwh": 0.12,
+                "total_cost": 0.0372,
+                "endpoints": {"/v1/chat/completions": 120},
+                "first_request": "2026-01-01T00:00:00Z",
+                "last_request": "2026-01-01T12:00:00Z",
+            },
+            "by_ip": {
+                "192.168.1.50": {
+                    "count": 100,
+                    "total_duration_secs": 3000.0,
+                    "total_energy_kwh": 0.1,
+                    "total_cost": 0.031,
+                    "endpoints": {"/v1/chat/completions": 100},
+                    "first_request": "2026-01-01T00:00:00Z",
+                    "last_request": "2026-01-01T12:00:00Z",
+                },
+                "10.8.0.42": {
+                    "count": 20,
+                    "total_duration_secs": 600.5,
+                    "total_energy_kwh": 0.02,
+                    "total_cost": 0.0062,
+                    "endpoints": {"/v1/chat/completions": 20},
+                    "first_request": "2026-01-01T00:00:00Z",
+                    "last_request": "2026-01-01T12:00:00Z",
+                },
+            },
+            "by_group": {
+                "home": {
+                    "count": 100,
+                    "total_duration_secs": 3000.0,
+                    "total_energy_kwh": 0.1,
+                    "total_cost": 0.031,
+                    "endpoints": {"/v1/chat/completions": 100},
+                    "first_request": "2026-01-01T00:00:00Z",
+                    "last_request": "2026-01-01T12:00:00Z",
+                },
+                "vpn": {
+                    "count": 20,
+                    "total_duration_secs": 600.5,
+                    "total_energy_kwh": 0.02,
+                    "total_cost": 0.0062,
+                    "endpoints": {"/v1/chat/completions": 20},
+                    "first_request": "2026-01-01T00:00:00Z",
+                    "last_request": "2026-01-01T12:00:00Z",
+                },
+            },
+            "ungrouped": {
+                "count": 0,
+                "total_duration_secs": 0,
+                "total_energy_kwh": 0,
+                "total_cost": 0,
+                "endpoints": {},
+                "first_request": "2026-01-01T00:00:00Z",
+                "last_request": "2026-01-01T00:00:00Z",
+            },
+            "days": [
+                {
+                    "date": "2026-01-01",
+                    "total": 50,
+                    "by_ip": {"192.168.1.50": 50},
+                    "by_group": {"home": 50},
+                },
+                {
+                    "date": "2026-01-02",
+                    "total": 70,
+                    "by_ip": {"192.168.1.50": 70},
+                    "by_group": {"home": 70},
+                },
+            ],
+            "today": {
+                "date": "2026-01-02",
+                "total": 70,
+                "total_energy_kwh": 0.07,
+                "total_cost": 0.021,
+                "by_ip": {"192.168.1.50": 50, "10.8.0.42": 20},
+                "by_group": {"home": 50, "vpn": 20},
+            },
+            "currency": "EUR",
+            "price_per_kwh": 0.30,
+            "last_request": "2026-01-01T12:00:00Z",
         },
         "gpu": {
             "vram_used_bytes": 2984828928,

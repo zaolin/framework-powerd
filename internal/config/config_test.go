@@ -333,3 +333,131 @@ func TestSmartdConfig_Validate(t *testing.T) {
 		t.Errorf("GetAlertRetention = %v, want 168h", got)
 	}
 }
+
+func TestLLMConfig_Defaults(t *testing.T) {
+	cfg := DefaultConfig().LLM
+	if cfg.Enabled {
+		t.Error("Expected LLM accounting to be disabled by default")
+	}
+	if cfg.AccessLog != "/var/log/caddy/llm-access.log" {
+		t.Errorf("Expected default access log path, got %q", cfg.AccessLog)
+	}
+	if cfg.GetHistoryDays() != 30 {
+		t.Errorf("Expected 30 history days, got %d", cfg.GetHistoryDays())
+	}
+	if cfg.GetSaveInterval() != time.Minute {
+		t.Errorf("Expected 1m save interval, got %v", cfg.GetSaveInterval())
+	}
+	if !cfg.IgnoreLocalIP {
+		t.Error("Expected local IP traffic to be ignored by default")
+	}
+	if len(cfg.CountedPaths) == 0 {
+		t.Error("Expected default counted paths")
+	}
+}
+
+func TestLLMConfig_Validate(t *testing.T) {
+	valid := DefaultConfig().LLM
+	valid.Enabled = true
+	if err := valid.Validate(); err != nil {
+		t.Errorf("valid LLM config rejected: %v", err)
+	}
+
+	disabled := LLMConfig{}
+	if err := disabled.Validate(); err != nil {
+		t.Errorf("disabled LLM config rejected: %v", err)
+	}
+
+	missingLog := valid
+	missingLog.AccessLog = ""
+	if err := missingLog.Validate(); err == nil {
+		t.Error("expected missing access_log to be rejected")
+	}
+
+	badInterval := valid
+	badInterval.SaveInterval = "soon"
+	if err := badInterval.Validate(); err == nil {
+		t.Error("expected invalid save_interval to be rejected")
+	}
+
+	duplicateGroup := valid
+	duplicateGroup.Groups = []IPGroup{
+		{Name: "home", CIDRs: []string{"192.168.0.0/16"}},
+		{Name: "home", CIDRs: []string{"10.0.0.0/8"}},
+	}
+	if err := duplicateGroup.Validate(); err == nil {
+		t.Error("expected duplicate group names to be rejected")
+	}
+
+	badCIDR := valid
+	badCIDR.Groups = []IPGroup{{Name: "home", CIDRs: []string{"not-a-cidr"}}}
+	if err := badCIDR.Validate(); err == nil {
+		t.Error("expected an invalid CIDR to be rejected")
+	}
+
+	badExclude := valid
+	badExclude.ExcludeIPs = []string{"nope"}
+	if err := badExclude.Validate(); err == nil {
+		t.Error("expected an invalid exclude IP to be rejected")
+	}
+
+	negativeHistory := valid
+	negativeHistory.HistoryDays = -1
+	if err := negativeHistory.Validate(); err == nil {
+		t.Error("expected a negative history_days to be rejected")
+	}
+
+	emptyPaths := valid
+	emptyPaths.CountedPaths = nil
+	if err := emptyPaths.Validate(); err == nil {
+		t.Error("expected empty counted_paths to be rejected when enabled")
+	}
+
+	caseDuplicate := valid
+	caseDuplicate.Groups = []IPGroup{
+		{Name: "home", CIDRs: []string{"192.168.0.0/16"}},
+		{Name: "Home", CIDRs: []string{"10.0.0.0/8"}},
+	}
+	if err := caseDuplicate.Validate(); err == nil {
+		t.Error("expected case-insensitive duplicate group names to be rejected")
+	}
+}
+
+func TestPricingConfig_Validate(t *testing.T) {
+	valid := PricingConfig{EnergyPricePerKWh: 0.30, Currency: "EUR"}
+	if err := valid.Validate(); err != nil {
+		t.Errorf("valid pricing rejected: %v", err)
+	}
+
+	negative := PricingConfig{EnergyPricePerKWh: -1, Currency: "EUR"}
+	if err := negative.Validate(); err == nil {
+		t.Error("expected a negative price to be rejected")
+	}
+
+	noCurrency := PricingConfig{EnergyPricePerKWh: 0.30}
+	if err := noCurrency.Validate(); err == nil {
+		t.Error("expected an empty currency to be rejected")
+	}
+
+	for _, bad := range []string{"EURO", "€", "E1R"} {
+		invalid := PricingConfig{EnergyPricePerKWh: 0.30, Currency: bad}
+		if err := invalid.Validate(); err == nil {
+			t.Errorf("expected currency %q to be rejected", bad)
+		}
+	}
+
+	lowercase := PricingConfig{EnergyPricePerKWh: 0.30, Currency: "eur"}
+	if err := lowercase.Validate(); err != nil {
+		t.Errorf("lowercase ISO code should be accepted: %v", err)
+	}
+}
+
+func TestPricingConfig_Defaults(t *testing.T) {
+	cfg := DefaultConfig().Pricing
+	if cfg.EnergyPricePerKWh != 0.30 {
+		t.Errorf("Expected default price 0.30, got %v", cfg.EnergyPricePerKWh)
+	}
+	if cfg.Currency != "EUR" {
+		t.Errorf("Expected default currency EUR, got %q", cfg.Currency)
+	}
+}

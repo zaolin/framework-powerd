@@ -17,6 +17,7 @@ A Go daemon to automatically manage power profiles on the **Framework Desktop**,
 - **SMART Health Monitoring**: Monitors smartd journald logs, keeps sticky persisted alerts, and classifies health, wear and sector failures.
 - **NVMe Health Polling**: Directly polls `nvme smart-log`/`smartctl` for wear, available spare, media errors, error-log growth and temperature, with configurable warning/critical thresholds.
 - **Storage Notifications**: Home Assistant persistent notifications and optional `notify_service` calls for new SMART/NVMe warnings.
+- **LLM Request Accounting**: Attributes LLM API requests to client IPs and IP groups by reading a Caddy access log in front of `llama-server`, with per-day request shares, energy and cost estimates.
 - **HA Controls**: Select entity for performance/powersave, button to reset the idle timer, and `framework_powerd.*` services for automations.
 - **Daemon Health**: `/status.health` and a diagnostic HA sensor expose turbostat, NVMe, metrics persistence and overall daemon status.
 - **Persistent Energy Metrics**: 24h, 7d and lifetime energy aggregates survive daemon restarts (atomic JSON state file).
@@ -34,6 +35,7 @@ A Go daemon to automatically manage power profiles on the **Framework Desktop**,
 - [Architecture](docs/architecture.md) — components, state machine, persistence
 - [Troubleshooting](docs/troubleshooting.md) — tools, permissions, watchdog, HA
 - [Security](docs/security.md) — JWT, network exposure, systemd hardening
+- [LLM request accounting](docs/llm.md) — Caddy setup, IP groups, per-day shares
 - [Migration to 1.3](docs/migration-1.3.md) — Ollama removal and entity changes
 - [Idle detection](docs/idle_logic.md) — detailed idle-state logic
 - [Changelog](CHANGELOG.md)
@@ -321,6 +323,9 @@ This project is compatible with [HACS](https://hacs.xyz/) (Home Assistant Commun
 *   **NVMe Health** (if enabled):
     *   Per-device Health, Percentage Used, Available Spare, Media Errors, Error Log Entries, Temperature, Data Written, Power-On Hours, Unsafe Shutdowns
     *   Storage Health (aggregated problem binary sensor)
+*   **LLM Requests** (if enabled):
+    *   Total and today request counts, today's energy and cost
+    *   Per-group counts and shares, per-IP counts with the share as an attribute
 *   **System Information** (diagnostic): Kernel, OS, CPU model, total RAM, daemon version
 
 ### API Control
@@ -427,6 +432,22 @@ The daemon supports a JSON configuration file. The full reference is in [Configu
     "persist": true,
     "state_file": "/var/lib/framework-powerd/metrics.json",
     "save_interval": "5m"
+  },
+  "llm": {
+    "enabled": false,
+    "access_log": "/var/log/caddy/llm-access.log",
+    "ignore_local_ip": true,
+    "groups": [
+      {"name": "home", "cidrs": ["192.168.0.0/16"]},
+      {"name": "vpn", "cidrs": ["10.8.0.0/24"]}
+    ],
+    "history_days": 30,
+    "state_file": "/var/lib/framework-powerd/llm.json",
+    "save_interval": "1m"
+  },
+  "pricing": {
+    "energy_price_per_kwh": 0.30,
+    "currency": "EUR"
   }
 }
 ```
@@ -454,6 +475,17 @@ The daemon supports a JSON configuration file. The full reference is in [Configu
 | `metrics.persist` | Persist | bool | `true` | Persist energy aggregates across restarts |
 | `metrics.state_file` | State File | string | `/var/lib/framework-powerd/metrics.json` | Atomic JSON state path |
 | `metrics.save_interval` | Save Interval | duration | `5m` | Periodic flush interval |
+| `llm.enabled` | Enabled | bool | `false` | Enable LLM request accounting |
+| `llm.access_log` | Access Log | string | `/var/log/caddy/llm-access.log` | Proxy access log to read |
+| `llm.groups` | Groups | list | `[]` | Named IP groups (`name` + `cidrs`) |
+| `llm.exclude_ips` | Excluded IPs | list | `[]` | IPs that are never counted |
+| `llm.counted_paths` | Counted Paths | list | inference paths | Only these request paths are counted |
+| `llm.history_days` | History Days | int | `30` | Days of history to keep, including today |
+| `llm.state_file` | State File | string | `/var/lib/framework-powerd/llm.json` | Persisted accounting state |
+| `llm.save_interval` | Save Interval | duration | `1m` | Periodic flush interval |
+| `llm.ignore_local_ip` | Ignore Local IP | bool | `true` | Skip loopback traffic |
+| `pricing.energy_price_per_kwh` | Price per kWh | float | `0.30` | Energy price for cost estimates |
+| `pricing.currency` | Currency | string | `EUR` | ISO 4217 code used as the cost sensor unit |
 
 Run with config:
 ```bash

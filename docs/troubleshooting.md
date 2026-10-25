@@ -172,6 +172,48 @@ Unit of measurement** — clear the old `MiB` override or select `GiB`. Repeat f
 - The per-device NVMe sensors are only created when at least one device is
   discovered.
 
+## Caddy will not start and every proxied site is down
+
+Caddy loads all sites from a single configuration, so one bad site block aborts
+the whole load. Every site on the host goes down, not just the broken one. The
+unit exits with status 1, and `Restart=on-abnormal` does not restart it, so it
+stays down until it is started again.
+
+Find the cause:
+
+```bash
+journalctl -u caddy --no-pager -n 40
+```
+
+A common error is an address collision:
+
+```
+loading new config: http app module: start: listening on :18080:
+listen tcp :18080: bind: address already in use
+```
+
+Check who currently owns the port, then move one of the two:
+
+```bash
+ss -ltnp | grep 18080
+```
+
+For a reverse-proxy site the listen port and the upstream port must be
+different. A site that proxies to its own listen port is both a loop and a
+collision. See [LLM Request Accounting](llm.md#setup) for the port layout used
+by the LLM snippet.
+
+After fixing the config, validate and restart:
+
+```bash
+sudo caddy validate --config /etc/caddy/Caddyfile
+sudo systemctl restart caddy
+```
+
+`caddy validate` can print `HTTP request failed ... validation complete` for a
+`reverse_proxy` health check even when the configuration is valid. That message
+is produced in validation mode and is not the reason a start fails.
+
 ## API returns 429
 
 `/mode` and `/activity` are limited to 1 request/second with a burst of 5 per

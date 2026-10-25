@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/zaolin/framework-powerd/internal/gpu"
+	"github.com/zaolin/framework-powerd/internal/llm"
 	"github.com/zaolin/framework-powerd/internal/nvme"
 	"github.com/zaolin/framework-powerd/internal/power"
 	"github.com/zaolin/framework-powerd/internal/smartd"
@@ -48,6 +49,7 @@ type StatusResponse struct {
 	NetworkDevices   []power.NetworkDeviceStatus `json:"network_devices"`
 	Smartd           *smartd.Stats               `json:"smartd,omitempty"`
 	NVMe             *nvme.Stats                 `json:"nvme,omitempty"`
+	LLM              *llm.Stats                  `json:"llm,omitempty"`
 	GPU              *gpu.Stats                  `json:"gpu,omitempty"`
 	SystemInfo       sysinfo.SystemInfo          `json:"system_info"`
 	Health           HealthResponse              `json:"health"`
@@ -58,6 +60,7 @@ type MonitorHealth struct {
 	Turbostat string `json:"turbostat"` // ok | stale | waiting
 	Smartd    bool   `json:"smartd"`
 	NVMe      string `json:"nvme"` // disabled | ok | warning | critical
+	LLM       string `json:"llm"`  // disabled | ok | waiting | error
 	GPU       bool   `json:"gpu"`
 }
 
@@ -79,6 +82,7 @@ type Server struct {
 	powerMonitor  *power.PowerMonitor
 	smartdMonitor *smartd.Monitor
 	nvmeMonitor   *nvme.Monitor
+	llmMonitor    *llm.Monitor
 	gpuMonitor    *gpu.Monitor
 	jwtSecret     []byte
 	sysInfo       sysinfo.SystemInfo
@@ -90,12 +94,13 @@ type Server struct {
 }
 
 // NewServer creates a new API server
-func NewServer(pm *power.PowerManager, monitor *power.PowerMonitor, jwtSecret string, smartdMon *smartd.Monitor, nvmeMon *nvme.Monitor, gpuMon *gpu.Monitor, sysInfo sysinfo.SystemInfo) *Server {
+func NewServer(pm *power.PowerManager, monitor *power.PowerMonitor, jwtSecret string, smartdMon *smartd.Monitor, nvmeMon *nvme.Monitor, llmMon *llm.Monitor, gpuMon *gpu.Monitor, sysInfo sysinfo.SystemInfo) *Server {
 	return &Server{
 		pm:            pm,
 		powerMonitor:  monitor,
 		smartdMonitor: smartdMon,
 		nvmeMonitor:   nvmeMon,
+		llmMonitor:    llmMon,
 		gpuMonitor:    gpuMon,
 		jwtSecret:     []byte(jwtSecret),
 		sysInfo:       sysInfo,
@@ -293,6 +298,10 @@ func (s *Server) HandleStatus(w http.ResponseWriter, r *http.Request) {
 		stats := s.nvmeMonitor.GetStats()
 		resp.NVMe = &stats
 	}
+	if s.llmMonitor != nil {
+		stats := s.llmMonitor.GetStats()
+		resp.LLM = &stats
+	}
 	if s.gpuMonitor != nil {
 		stats := s.gpuMonitor.GetStats()
 		resp.GPU = &stats
@@ -326,13 +335,12 @@ func (s *Server) buildHealth(isIdle bool) HealthResponse {
 		nvmeHealth = s.nvmeMonitor.GetStats().HealthSummary()
 	}
 
-	status := "ok"
-	if turbostat == "stale" ||
-		(turbostat == "waiting" && time.Since(s.startedAt) > 30*time.Second) ||
-		metrics.LastError != "" ||
-		(nvmeHealth != "disabled" && nvmeHealth != nvme.HealthOK) {
-		status = "degraded"
+	llmHealth := "disabled"
+	if s.llmMonitor != nil {
+		llmHealth = s.llmMonitor.Health()
 	}
+
+	status := healthStatus(turbostat, time.Since(s.startedAt), metrics.LastError, llmHealth, nvmeHealth)
 
 	return HealthResponse{
 		Status:                status,
@@ -345,10 +353,24 @@ func (s *Server) buildHealth(isIdle bool) HealthResponse {
 			Turbostat: turbostat,
 			Smartd:    s.smartdMonitor != nil,
 			NVMe:      nvmeHealth,
+			LLM:       llmHealth,
 			GPU:       s.gpuMonitor != nil,
 		},
 		MetricsState: metrics,
 	}
+}
+
+// healthStatus derives the overall status from the individual monitors.
+// turbostat "waiting" is tolerated during the first 30 seconds of uptime.
+func healthStatus(turbostat string, uptime time.Duration, metricsErr, llmHealth, nvmeHealth string) string {
+	if turbostat == "stale" ||
+		(turbostat == "waiting" && uptime > 30*time.Second) ||
+		metricsErr != "" ||
+		llmHealth == "error" ||
+		(nvmeHealth != "disabled" && nvmeHealth != nvme.HealthOK) {
+		return "degraded"
+	}
+	return "ok"
 }
 
 // HandleHealth reports daemon liveness without exposing any control-plane
@@ -391,6 +413,20 @@ func (s *Server) HandleSmartdStats(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, s.smartdMonitor.GetStats())
+}
+
+// HandleLLMStats returns LLM request accounting statistics.
+func (s *Server) HandleLLMStats(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if s.llmMonitor == nil {
+		http.Error(w, "LLM accounting not enabled", http.StatusNotFound)
+		return
+	}
+
+	writeJSON(w, http.StatusOK, s.llmMonitor.GetStats())
 }
 
 // HandleNVMeStats returns direct NVMe health statistics.

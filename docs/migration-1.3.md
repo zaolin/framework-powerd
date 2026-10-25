@@ -21,16 +21,26 @@ curl http://localhost:8080/healthz
 
 ## 2. Clean the configuration
 
-Remove the old sections:
+Remove the old `ollama` section:
 
 ```json
-"ollama": { ... },
-"pricing": { ... }
+"ollama": { ... }
 ```
 
 Unknown keys are ignored by the JSON decoder, so the daemon still starts, but
-remove them to keep the file accurate. Add the new section if you want to
-customize persistence:
+remove them to keep the file accurate.
+
+Keep the `pricing` section: version 1.6 uses it again for LLM cost estimates.
+If you removed it in 1.3, add it back with a three-letter currency code:
+
+```json
+"pricing": {
+  "energy_price_per_kwh": 0.30,
+  "currency": "EUR"
+}
+```
+
+Add the new section if you want to customize persistence:
 
 ```json
 "metrics": {

@@ -116,7 +116,7 @@ class TestSystemInfoSensors:
         from custom_components.framework_powerd.sensor import DaemonVersionSensor
 
         sensor = DaemonVersionSensor(mock_coordinator)
-        assert sensor.native_value == "1.5.0"
+        assert sensor.native_value == "1.6.0"
 
     def test_kernel_version_unique_id(self, mock_coordinator):
         from custom_components.framework_powerd.sensor import KernelVersionSensor
@@ -333,7 +333,10 @@ class TestRAMMemorySensors:
         assert sensor.native_value == expected
 
     def test_missing_memory_returns_zero(self, mock_coordinator):
-        from custom_components.framework_powerd.sensor import RAMUsedSensor, RAMUsageSensor
+        from custom_components.framework_powerd.sensor import (
+            RAMUsedSensor,
+            RAMUsageSensor,
+        )
 
         del mock_coordinator.data["memory"]
         assert RAMUsedSensor(mock_coordinator).native_value == 0
@@ -353,7 +356,10 @@ class TestRAMMemorySensors:
         assert RAMFreeSensor(mock_coordinator)._attr_unique_id == "ram_free"
         assert RAMAvailableSensor(mock_coordinator)._attr_unique_id == "ram_available"
         assert RAMUsageSensor(mock_coordinator)._attr_unique_id == "ram_usage"
-        assert RAMUsedSensor(mock_coordinator)._attr_native_unit_of_measurement == UnitOfInformation.GIBIBYTES
+        assert (
+            RAMUsedSensor(mock_coordinator)._attr_native_unit_of_measurement
+            == UnitOfInformation.GIBIBYTES
+        )
         assert RAMUsageSensor(mock_coordinator)._attr_native_unit_of_measurement == "%"
 
 
@@ -459,8 +465,12 @@ class TestNVMeSensors:
             NVMePercentageUsedSensor,
         )
 
-        assert NVMePercentageUsedSensor(mock_coordinator, "/dev/nvme0").native_value == 7
-        assert NVMeAvailableSpareSensor(mock_coordinator, "/dev/nvme0").native_value == 100
+        assert (
+            NVMePercentageUsedSensor(mock_coordinator, "/dev/nvme0").native_value == 7
+        )
+        assert (
+            NVMeAvailableSpareSensor(mock_coordinator, "/dev/nvme0").native_value == 100
+        )
 
     def test_errors_and_temperature(self, mock_coordinator):
         from custom_components.framework_powerd.sensor import (
@@ -472,7 +482,9 @@ class TestNVMeSensors:
 
         assert NVMeMediaErrorsSensor(mock_coordinator, "/dev/nvme0").native_value == 0
         assert NVMeErrorLogSensor(mock_coordinator, "/dev/nvme0").native_value == 0
-        assert NVMeCriticalWarningSensor(mock_coordinator, "/dev/nvme0").native_value == 0
+        assert (
+            NVMeCriticalWarningSensor(mock_coordinator, "/dev/nvme0").native_value == 0
+        )
         assert NVMeTemperatureSensor(mock_coordinator, "/dev/nvme0").native_value == 49
 
     def test_data_written_and_uptime(self, mock_coordinator):
@@ -482,9 +494,15 @@ class TestNVMeSensors:
             NVMeUnsafeShutdownsSensor,
         )
 
-        assert NVMeDataWrittenSensor(mock_coordinator, "/dev/nvme0").native_value == 120.0
-        assert NVMePowerOnHoursSensor(mock_coordinator, "/dev/nvme0").native_value == 500
-        assert NVMeUnsafeShutdownsSensor(mock_coordinator, "/dev/nvme0").native_value == 4
+        assert (
+            NVMeDataWrittenSensor(mock_coordinator, "/dev/nvme0").native_value == 120.0
+        )
+        assert (
+            NVMePowerOnHoursSensor(mock_coordinator, "/dev/nvme0").native_value == 500
+        )
+        assert (
+            NVMeUnsafeShutdownsSensor(mock_coordinator, "/dev/nvme0").native_value == 4
+        )
 
     def test_missing_device_returns_none(self, mock_coordinator):
         from custom_components.framework_powerd.sensor import NVMeHealthSensor
@@ -534,7 +552,21 @@ class TestDaemonHealthSensor:
         attrs = sensor.extra_state_attributes
         assert attrs["turbostat"] == "ok"
         assert attrs["nvme"] == "ok"
+        assert attrs["llm"] == "ok"
         assert attrs["metrics_state"]["enabled"] is True
+
+    def test_llm_error_is_visible(self, mock_coordinator):
+        from custom_components.framework_powerd.sensor import DaemonHealthSensor
+
+        mock_coordinator.data["health"]["status"] = "degraded"
+        mock_coordinator.data["health"]["monitors"]["llm"] = "error"
+        mock_coordinator.data["llm"]["last_error"] = "permission denied"
+
+        sensor = DaemonHealthSensor(mock_coordinator)
+        assert sensor.native_value == "degraded"
+        attrs = sensor.extra_state_attributes
+        assert attrs["llm"] == "error"
+        assert attrs["llm_last_error"] == "permission denied"
 
     def test_missing_health(self, mock_coordinator):
         from custom_components.framework_powerd.sensor import DaemonHealthSensor
@@ -572,3 +604,163 @@ class TestNVMeStatusSensor:
 
         del mock_coordinator.data["nvme"]
         assert NVMeStatusSensor(mock_coordinator).native_value == "disabled"
+
+
+class TestLLMSensors:
+    """Test LLM request accounting sensors."""
+
+    def test_total_requests(self, mock_coordinator):
+        from custom_components.framework_powerd.sensor import LLMRequestsTotalSensor
+
+        sensor = LLMRequestsTotalSensor(mock_coordinator)
+        assert sensor.native_value == 120
+        assert sensor._attr_unique_id == "llm_requests_total"
+        attrs = sensor.extra_state_attributes
+        assert attrs["currency"] == "EUR"
+        assert len(attrs["history"]) == 2
+
+    def test_requests_today(self, mock_coordinator):
+        from custom_components.framework_powerd.sensor import LLMRequestsTodaySensor
+
+        sensor = LLMRequestsTodaySensor(mock_coordinator)
+        assert sensor.native_value == 70
+        assert sensor.extra_state_attributes["date"] == "2026-01-02"
+
+    def test_requests_today_percent_removed(self):
+        from custom_components.framework_powerd import sensor
+
+        assert not hasattr(sensor, "LLMRequestsTodayPercentSensor")
+
+    def test_percent_is_zero_without_requests(self, mock_coordinator):
+        from custom_components.framework_powerd.sensor import LLMGroupPercentSensor
+
+        mock_coordinator.data["llm"]["today"]["total"] = 0
+        assert LLMGroupPercentSensor(mock_coordinator, "home").native_value == 0
+
+    def test_energy_and_cost_are_today_values(self, mock_coordinator):
+        from custom_components.framework_powerd.sensor import (
+            LLMCostTodaySensor,
+            LLMEnergyTodaySensor,
+        )
+
+        assert LLMEnergyTodaySensor(mock_coordinator).native_value == 0.07
+
+        cost = LLMCostTodaySensor(mock_coordinator)
+        assert cost.native_value == 0.021
+        assert cost.native_unit_of_measurement == "EUR"
+        assert cost.extra_state_attributes["currency"] == "EUR"
+
+    def test_group_requests(self, mock_coordinator):
+        from custom_components.framework_powerd.sensor import LLMGroupRequestsSensor
+
+        sensor = LLMGroupRequestsSensor(mock_coordinator, "home")
+        assert sensor.native_value == 50
+        assert sensor._attr_unique_id == "llm_group_home_requests"
+
+    def test_group_percent(self, mock_coordinator):
+        from custom_components.framework_powerd.sensor import LLMGroupPercentSensor
+
+        sensor = LLMGroupPercentSensor(mock_coordinator, "home")
+        assert sensor.native_value == 71.4
+        assert sensor._attr_name == "LLM Home Requests Today Share"
+        attrs = sensor.extra_state_attributes
+        assert attrs["requests"] == 50
+        assert attrs["total_requests"] == 70
+
+    def test_ip_requests(self, mock_coordinator):
+        from custom_components.framework_powerd.sensor import LLMIPRequestsSensor
+
+        sensor = LLMIPRequestsSensor(mock_coordinator, "192.168.1.50")
+        assert sensor.native_value == 50
+        assert sensor._attr_unique_id == "llm_ip_192_168_1_50"
+        assert sensor.extra_state_attributes["percent"] == 71.4
+
+    def test_missing_llm_block(self, mock_coordinator):
+        from custom_components.framework_powerd.sensor import (
+            LLMGroupRequestsSensor,
+            LLMRequestsTodaySensor,
+            LLMRequestsTotalSensor,
+        )
+
+        del mock_coordinator.data["llm"]
+        assert LLMRequestsTotalSensor(mock_coordinator).native_value == 0
+        assert LLMRequestsTodaySensor(mock_coordinator).native_value == 0
+        assert LLMGroupRequestsSensor(mock_coordinator, "home").native_value == 0
+
+
+class TestLLMEntityFactory:
+    """Test the persistent LLM entity factory (entities appear over time)."""
+
+    def test_base_entities_added_exactly_once(self, mock_coordinator):
+        from custom_components.framework_powerd.sensor import build_llm_entities
+
+        mock_coordinator.data["llm"]["by_group"] = {}
+        mock_coordinator.data["llm"]["by_ip"] = {}
+
+        registered = set()
+        first = build_llm_entities(mock_coordinator, registered)
+        assert sorted(type(e).__name__ for e in first) == [
+            "LLMCostTodaySensor",
+            "LLMEnergyTodaySensor",
+            "LLMRequestsTodaySensor",
+            "LLMRequestsTotalSensor",
+        ]
+        assert build_llm_entities(mock_coordinator, registered) == []
+
+    def test_groups_and_ips_that_appear_later(self, mock_coordinator):
+        from custom_components.framework_powerd.sensor import build_llm_entities
+
+        mock_coordinator.data["llm"]["by_group"] = {"home": 50}
+        mock_coordinator.data["llm"]["by_ip"] = {"192.168.1.50": 50}
+        registered = set()
+
+        first = build_llm_entities(mock_coordinator, registered)
+        assert sum(type(e).__name__ == "LLMGroupRequestsSensor" for e in first) == 1
+        assert sum(type(e).__name__ == "LLMGroupPercentSensor" for e in first) == 1
+        assert sum(type(e).__name__ == "LLMIPRequestsSensor" for e in first) == 1
+
+        # A new group and a new client appear later.
+        mock_coordinator.data["llm"]["by_group"]["vpn"] = 20
+        mock_coordinator.data["llm"]["by_ip"]["10.8.0.42"] = 20
+
+        second = build_llm_entities(mock_coordinator, registered)
+        assert sorted(type(e).__name__ for e in second) == [
+            "LLMGroupPercentSensor",
+            "LLMGroupRequestsSensor",
+            "LLMIPRequestsSensor",
+        ]
+
+        assert build_llm_entities(mock_coordinator, registered) == []
+
+    def test_missing_llm_block(self, mock_coordinator):
+        from custom_components.framework_powerd.sensor import build_llm_entities
+
+        del mock_coordinator.data["llm"]
+        assert build_llm_entities(mock_coordinator, set()) == []
+
+    def test_null_maps_are_tolerated(self, mock_coordinator):
+        from custom_components.framework_powerd.sensor import build_llm_entities
+
+        mock_coordinator.data["llm"]["by_group"] = None
+        mock_coordinator.data["llm"]["by_ip"] = None
+        entities = build_llm_entities(mock_coordinator, set())
+        assert entities, "the base sensors must still be created"
+
+    def test_ip_entities_are_capped(self, mock_coordinator):
+        from custom_components.framework_powerd.sensor import (
+            MAX_LLM_IP_SENSORS,
+            build_llm_entities,
+        )
+
+        mock_coordinator.data["llm"]["by_group"] = {}
+        mock_coordinator.data["llm"]["by_ip"] = {
+            f"192.168.1.{i}": 1 for i in range(1, MAX_LLM_IP_SENSORS + 10)
+        }
+
+        registered = set()
+        entities = build_llm_entities(mock_coordinator, registered)
+        ip_entities = [e for e in entities if type(e).__name__ == "LLMIPRequestsSensor"]
+        assert len(ip_entities) == MAX_LLM_IP_SENSORS
+
+        extra = build_llm_entities(mock_coordinator, registered)
+        assert not [e for e in extra if type(e).__name__ == "LLMIPRequestsSensor"]

@@ -12,10 +12,11 @@ keys keep their defaults.
 
 ## Legacy keys
 
-The `ollama` and `pricing` sections from 1.2 and earlier are ignored. Ollama
-monitoring was removed in 1.3; the JSON decoder tolerates unknown keys, so the
-daemon still starts, but those sections have no effect. Remove them to keep the
-file accurate.
+The `ollama` section from 1.2 and earlier is ignored. Ollama monitoring was
+removed in 1.3; the JSON decoder tolerates unknown keys, so the daemon still
+starts, but the section has no effect. Remove it to keep the file accurate.
+
+The `pricing` section is used again since 1.6 for the LLM cost estimates.
 
 ## CLI precedence
 
@@ -78,6 +79,33 @@ Direct NVMe SMART polling, independent of smartd journal messages.
 The poller uses `nvme smart-log --output-format=json` first and falls back to
 `smartctl --json=o -a`. If neither tool is installed, polling is disabled and a
 warning is logged. Health is exposed at `/status.nvme` and `/nvme/stats`.
+
+### `llm`
+
+LLM request accounting. The data source is a reverse proxy access log (Caddy
+JSON format) in front of `llama-server`; see [LLM Request Accounting](llm.md).
+
+| Key | Type | Default | Description |
+|---|---|---|---|
+| `enabled` | bool | `false` | Enable LLM request accounting. |
+| `access_log` | string | `/var/log/caddy/llm-access.log` | Path to the proxy access log. |
+| `groups` | list | `[]` | Named IP groups: `{"name": "home", "cidrs": [...]}`. |
+| `exclude_ips` | list | `[]` | IPs that are never counted. |
+| `counted_paths` | list | inference paths | Only these request paths are counted. |
+| `history_days` | int | `30` | Days of history to keep, including today. |
+| `state_file` | string | `/var/lib/framework-powerd/llm.json` | Persisted accounting state. |
+| `save_interval` | duration | `1m` | Periodic flush interval. |
+| `ignore_local_ip` | bool | `true` | Skip loopback traffic. |
+
+The access log must be readable by the daemon. `/var/log/caddy` is root-only,
+so the daemon has to run as root.
+
+### `pricing`
+
+| Key | Type | Default | Description |
+|---|---|---|---|
+| `energy_price_per_kwh` | float | `0.30` | Energy price used for LLM cost estimates. |
+| `currency` | string | `EUR` | ISO 4217 code used as the cost sensor unit. |
 
 ### `gpu`
 
@@ -160,6 +188,22 @@ back.
     "state_file": "/var/lib/framework-powerd/metrics.json",
     "save_interval": "5m"
   },
+  "llm": {
+    "enabled": false,
+    "access_log": "/var/log/caddy/llm-access.log",
+    "ignore_local_ip": true,
+    "groups": [
+      {"name": "home", "cidrs": ["192.168.0.0/16"]},
+      {"name": "vpn", "cidrs": ["10.8.0.0/24"]}
+    ],
+    "history_days": 30,
+    "state_file": "/var/lib/framework-powerd/llm.json",
+    "save_interval": "1m"
+  },
+  "pricing": {
+    "energy_price_per_kwh": 0.30,
+    "currency": "EUR"
+  },
   "peripherals": {
     "vrm_loss_percent": 7,
     "fan_idle_rpm": 2000
@@ -168,6 +212,9 @@ back.
 ```
 
 A ready-to-copy file lives at [`configs/config.example.json`](../configs/config.example.json).
+It ships with LLM accounting disabled. Enable it only after installing the
+Caddy snippet described in [LLM request accounting](llm.md); without the
+snippet the access log never appears and the sensors stay at zero.
 
 ## Credentials
 

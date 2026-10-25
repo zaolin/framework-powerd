@@ -40,6 +40,7 @@ curl http://localhost:8080/healthz
     "turbostat": "ok",
     "smartd": true,
     "nvme": "ok",
+    "llm": "ok",
     "gpu": true
   },
   "metrics_state": {
@@ -54,9 +55,11 @@ curl http://localhost:8080/healthz
 - `monitors.turbostat` is `ok`, `stale` (no sample for more than 15 s) or
   `waiting` (no sample yet).
 - `status` becomes `degraded` when turbostat is stale, still waiting after the
-  30-second startup grace period, the last metrics write failed, or any NVMe
-  device is `warning`/`critical`.
+  30-second startup grace period, the last metrics write failed, LLM accounting
+  reports `error`, or any NVMe device is `warning`/`critical`.
 - `monitors.nvme` is `disabled`, `ok`, `warning` or `critical`.
+- `monitors.llm` is `disabled`, `ok`, `waiting` or `error`. Only `error`
+  degrades the status; `waiting` is normal before the first counted request.
 - `last_error` is omitted while persistence is healthy.
 
 ## `GET /status`
@@ -145,7 +148,7 @@ Full daemon state. Requires auth.
     "cpu_model": "AMD Ryzen AI 7 350 w/ Radeon 860M",
     "cpu_count": 16,
     "total_ram_bytes": 50010562560,
-    "daemon_version": "1.5.0"
+    "daemon_version": "1.6.0"
   }
 }
 ```
@@ -235,6 +238,56 @@ curl -H "Authorization: Bearer $TOKEN" http://localhost:8080/smartd/stats
 Alerts are de-duplicated per device/category, keep a first/last seen timestamp
 and count, and stay visible for `smartd.alert_retention` (default 7 days). They
 are persisted to `smartd.state_file`.
+
+## `GET /llm/stats`
+
+Returns LLM request accounting when `llm.enabled` is true; otherwise `404`.
+Requires auth.
+
+```bash
+curl -H "Authorization: Bearer $TOKEN" http://localhost:8080/llm/stats
+```
+
+```json
+{
+  "enabled": true,
+  "since": "2026-10-21T00:00:00Z",
+  "total": {
+    "count": 120,
+    "total_duration_secs": 3600.5,
+    "total_energy_kwh": 0.12,
+    "total_cost": 0.0372,
+    "endpoints": {"/v1/chat/completions": 120},
+    "first_request": "2026-10-21T00:00:00Z",
+    "last_request": "2026-10-21T14:30:00Z"
+  },
+  "by_ip": {
+    "192.168.1.50": {"count": 100, "total_duration_secs": 3000.0}
+  },
+  "by_group": {
+    "home": {"count": 100, "total_duration_secs": 3000.0}
+  },
+  "ungrouped": {"count": 0},
+  "days": [
+    {"date": "2026-10-21", "total": 70, "total_energy_kwh": 0.07, "total_cost": 0.021, "by_ip": {}, "by_group": {}}
+  ],
+  "today": {
+    "date": "2026-10-21",
+    "total": 70,
+    "total_energy_kwh": 0.07,
+    "total_cost": 0.021,
+    "by_ip": {"192.168.1.50": 50, "10.8.0.42": 20},
+    "by_group": {"home": 50, "vpn": 20}
+  },
+  "currency": "EUR",
+  "price_per_kwh": 0.30,
+  "last_request": "2026-10-21T14:30:00Z"
+}
+```
+
+The same block is part of `GET /status`. Day keys are UTC dates taken from the
+timestamp in each access log line. See
+[LLM Request Accounting](llm.md) for the setup and the semantics.
 
 ## `GET /nvme/stats`
 

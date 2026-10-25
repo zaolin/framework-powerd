@@ -21,6 +21,7 @@ import (
 	"github.com/zaolin/framework-powerd/internal/config"
 	"github.com/zaolin/framework-powerd/internal/detector"
 	"github.com/zaolin/framework-powerd/internal/gpu"
+	"github.com/zaolin/framework-powerd/internal/llm"
 	"github.com/zaolin/framework-powerd/internal/monitor"
 	"github.com/zaolin/framework-powerd/internal/nvme"
 	"github.com/zaolin/framework-powerd/internal/peripherals"
@@ -122,6 +123,14 @@ func runServer() {
 	}
 	if err := cfg.NVMe.Validate(); err != nil {
 		log.Fatalf("Invalid configuration: %v", err)
+	}
+	if err := cfg.LLM.Validate(); err != nil {
+		log.Fatalf("Invalid configuration: %v", err)
+	}
+	if cfg.LLM.Enabled {
+		if err := cfg.Pricing.Validate(); err != nil {
+			log.Fatalf("Invalid configuration: %v", err)
+		}
 	}
 
 	sysinfo.DaemonVersion = version
@@ -386,6 +395,37 @@ func runServer() {
 		go nvmeMonitor.Start(nvmeCtx)
 	}
 
+	// Start LLM request accounting (if enabled)
+	var llmMonitor *llm.Monitor
+	var llmCancel context.CancelFunc
+	var llmDone chan struct{}
+	var llmPersistDone chan struct{}
+	if cfg.LLM.Enabled {
+		log.Println("LLM request accounting enabled")
+		llmMonitor = llm.NewMonitor(cfg.LLM, cfg.Pricing)
+		llmMonitor.SetPowerProvider(func() float64 {
+			return powerMon.GetStatus().Current.EstimatedTotalWatts
+		})
+		if restored, err := llmMonitor.LoadState(); err != nil {
+			log.Printf("[LLM] Could not restore state: %v", err)
+		} else if restored {
+			log.Println("[LLM] Restored request accounting state.")
+		}
+		var llmCtx context.Context
+		llmCtx, llmCancel = context.WithCancel(context.Background())
+		defer llmCancel()
+		llmDone = make(chan struct{})
+		llmPersistDone = make(chan struct{})
+		go func() {
+			defer close(llmDone)
+			llmMonitor.Start(llmCtx)
+		}()
+		go func() {
+			defer close(llmPersistDone)
+			llmMonitor.StartPersistence(llmCtx)
+		}()
+	}
+
 	// Start GPU Monitor (if enabled)
 	var gpuMonitor *gpu.Monitor
 	if cfg.GPU.Enabled {
@@ -413,7 +453,7 @@ func runServer() {
 	// Collect static system info once at startup.
 	sysInfo := sysinfo.Collect()
 
-	apiServer := api.NewServer(pm, powerMon, jwtSecret, smartdMonitor, nvmeMonitor, gpuMonitor, sysInfo)
+	apiServer := api.NewServer(pm, powerMon, jwtSecret, smartdMonitor, nvmeMonitor, llmMonitor, gpuMonitor, sysInfo)
 
 	mux := http.NewServeMux()
 
@@ -423,6 +463,7 @@ func runServer() {
 	statusHandler := apiServer.AuthMiddleware(apiServer.HandleStatus)
 	statsHandler := apiServer.AuthMiddleware(apiServer.HandleSmartdStats)
 	nvmeHandler := apiServer.AuthMiddleware(apiServer.HandleNVMeStats)
+	llmHandler := apiServer.AuthMiddleware(apiServer.HandleLLMStats)
 
 	// When auth is disabled (--disable-auth), AuthMiddleware passes through.
 	if authEnabled {
@@ -439,6 +480,7 @@ func runServer() {
 	mux.HandleFunc("/activity", activityHandler)
 	mux.HandleFunc("/smartd/stats", statsHandler)
 	mux.HandleFunc("/nvme/stats", nvmeHandler)
+	mux.HandleFunc("/llm/stats", llmHandler)
 	// S8: 404 catch-all for unmatched paths.
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
@@ -518,6 +560,19 @@ func runServer() {
 		}
 		if err := smartdMonitor.SaveState(); err != nil {
 			log.Printf("Failed to save SMART alerts on shutdown: %v", err)
+		}
+	}
+
+	// Stop the LLM poller and persistence loop before flushing, so the saved
+	// snapshot is final.
+	if llmMonitor != nil {
+		if llmCancel != nil {
+			llmCancel()
+		}
+		<-llmDone
+		<-llmPersistDone
+		if err := llmMonitor.SaveState(); err != nil {
+			log.Printf("Failed to save LLM state on shutdown: %v", err)
 		}
 	}
 

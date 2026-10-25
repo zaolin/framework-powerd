@@ -4,8 +4,10 @@ package config
 import (
 	"encoding/json"
 	"fmt"
+	"net"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 )
 
@@ -18,6 +20,10 @@ const DefaultMetricsStateFile = "/var/lib/framework-powerd/metrics.json"
 // alerts.
 const DefaultAlertsStateFile = "/var/lib/framework-powerd/alerts.json"
 
+// DefaultLLMStateFile is the default location for persisted LLM request
+// accounting state.
+const DefaultLLMStateFile = "/var/lib/framework-powerd/llm.json"
+
 // Config represents the daemon configuration
 type Config struct {
 	Server      ServerConfig      `json:"server"`
@@ -26,6 +32,8 @@ type Config struct {
 	GPU         GPUConfig         `json:"gpu"`
 	Peripherals PeripheralsConfig `json:"peripherals"`
 	Metrics     MetricsConfig     `json:"metrics"`
+	LLM         LLMConfig         `json:"llm"`
+	Pricing     PricingConfig     `json:"pricing"`
 }
 
 // ServerConfig contains server settings
@@ -203,6 +211,115 @@ func (m *MetricsConfig) Validate() error {
 	return nil
 }
 
+// IPGroup defines a named group of IP ranges
+type IPGroup struct {
+	Name  string   `json:"name"`
+	CIDRs []string `json:"cidrs"`
+}
+
+// LLMConfig contains settings for LLM request accounting. The data source is
+// a reverse proxy access log (Caddy JSON format) in front of llama-server.
+type LLMConfig struct {
+	Enabled       bool      `json:"enabled"`
+	AccessLog     string    `json:"access_log"`
+	Groups        []IPGroup `json:"groups"`
+	ExcludeIPs    []string  `json:"exclude_ips"`
+	CountedPaths  []string  `json:"counted_paths"`
+	HistoryDays   int       `json:"history_days"`
+	StateFile     string    `json:"state_file"`
+	SaveInterval  string    `json:"save_interval"`
+	IgnoreLocalIP bool      `json:"ignore_local_ip"`
+}
+
+// GetSaveInterval parses the persistence interval.
+func (l *LLMConfig) GetSaveInterval() time.Duration {
+	d, err := time.ParseDuration(l.SaveInterval)
+	if err != nil || d <= 0 {
+		return time.Minute
+	}
+	return d
+}
+
+// GetHistoryDays returns the number of daily buckets to keep.
+func (l *LLMConfig) GetHistoryDays() int {
+	if l.HistoryDays <= 0 {
+		return 30
+	}
+	return l.HistoryDays
+}
+
+// Validate checks the LLM accounting settings.
+func (l *LLMConfig) Validate() error {
+	if !l.Enabled {
+		return nil
+	}
+	if l.AccessLog == "" {
+		return fmt.Errorf("llm.access_log must be set when llm.enabled is true")
+	}
+	if l.HistoryDays < 0 {
+		return fmt.Errorf("llm.history_days must not be negative, got %d", l.HistoryDays)
+	}
+	if len(l.CountedPaths) == 0 {
+		return fmt.Errorf("llm.counted_paths must list at least one path when llm.enabled is true")
+	}
+	if l.SaveInterval != "" {
+		if d, err := time.ParseDuration(l.SaveInterval); err != nil {
+			return fmt.Errorf("llm.save_interval %q is not a valid duration: %w", l.SaveInterval, err)
+		} else if d <= 0 {
+			return fmt.Errorf("llm.save_interval must be greater than zero, got %q", l.SaveInterval)
+		}
+	}
+	names := map[string]bool{}
+	for _, group := range l.Groups {
+		if group.Name == "" {
+			return fmt.Errorf("llm.groups: every group needs a name")
+		}
+		// Group names become Home Assistant entity names, so compare them
+		// case-insensitively to catch "home" and "Home".
+		key := strings.ToLower(group.Name)
+		if names[key] {
+			return fmt.Errorf("llm.groups: duplicate group name %q (names are compared case-insensitively)", group.Name)
+		}
+		names[key] = true
+		for _, cidr := range group.CIDRs {
+			if _, _, err := net.ParseCIDR(cidr); err != nil {
+				if net.ParseIP(cidr) == nil {
+					return fmt.Errorf("llm.groups: %q is neither a CIDR nor an IP address", cidr)
+				}
+			}
+		}
+	}
+	for _, ip := range l.ExcludeIPs {
+		if net.ParseIP(ip) == nil {
+			return fmt.Errorf("llm.exclude_ips: %q is not a valid IP address", ip)
+		}
+	}
+	return nil
+}
+
+// PricingConfig contains energy pricing settings
+type PricingConfig struct {
+	EnergyPricePerKWh float64 `json:"energy_price_per_kwh"`
+	Currency          string  `json:"currency"`
+}
+
+// Validate checks the pricing settings used for cost estimates.
+func (p *PricingConfig) Validate() error {
+	if p.EnergyPricePerKWh < 0 {
+		return fmt.Errorf("pricing.energy_price_per_kwh must not be negative, got %v", p.EnergyPricePerKWh)
+	}
+	currency := strings.TrimSpace(p.Currency)
+	if len(currency) != 3 {
+		return fmt.Errorf("pricing.currency must be a three-letter ISO 4217 code, got %q", p.Currency)
+	}
+	for _, r := range strings.ToUpper(currency) {
+		if r < 'A' || r > 'Z' {
+			return fmt.Errorf("pricing.currency must be a three-letter ISO 4217 code, got %q", p.Currency)
+		}
+	}
+	return nil
+}
+
 // DefaultConfig returns the default configuration
 func DefaultConfig() *Config {
 	return &Config{
@@ -237,6 +354,28 @@ func DefaultConfig() *Config {
 			Persist:      true,
 			StateFile:    DefaultMetricsStateFile,
 			SaveInterval: "5m",
+		},
+		LLM: LLMConfig{
+			Enabled:       false,
+			AccessLog:     "/var/log/caddy/llm-access.log",
+			HistoryDays:   30,
+			StateFile:     DefaultLLMStateFile,
+			SaveInterval:  "1m",
+			IgnoreLocalIP: true,
+			CountedPaths: []string{
+				"/v1/chat/completions",
+				"/chat/completions",
+				"/v1/completions",
+				"/completions",
+				"/v1/responses",
+				"/v1/messages",
+				"/v1/embeddings",
+				"/embedding",
+			},
+		},
+		Pricing: PricingConfig{
+			EnergyPricePerKWh: 0.30,
+			Currency:          "EUR",
 		},
 	}
 }
