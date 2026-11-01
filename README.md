@@ -14,6 +14,7 @@ A Go daemon to automatically manage power profiles on the **Framework Desktop**,
 - **Game Pausing**: Recursively pauses the entire process tree of a Steam game (including Proton/Wine wrappers) when idle. **Syncs state** on startup to prevent conflicts.
 - **Steam Remote Play Detection**: Detects virtual input devices from Remote Play (specifically `js` interfaces) to keep the system active.
 - **GPU Monitoring**: Tracks AMD GPU metrics via sysfs (VRAM, GTT, temperature, power) and system CPU usage via `/proc/stat`.
+- **NPU Monitoring**: Reads AMD XDNA telemetry through the accel DRM interface: NPU power, per-column AIE utilization, clocks, TOPs, hardware contexts with owning PIDs, firmware, and a switchable power mode.
 - **SMART Health Monitoring**: Monitors smartd journald logs, keeps sticky persisted alerts, and classifies health, wear and sector failures.
 - **NVMe Health Polling**: Directly polls `nvme smart-log`/`smartctl` for wear, available spare, media errors, error-log growth and temperature, with configurable warning/critical thresholds.
 - **Storage Notifications**: Home Assistant persistent notifications and optional `notify_service` calls for new SMART/NVMe warnings.
@@ -36,6 +37,7 @@ A Go daemon to automatically manage power profiles on the **Framework Desktop**,
 - [Troubleshooting](docs/troubleshooting.md) — tools, permissions, watchdog, HA
 - [Security](docs/security.md) — JWT, network exposure, systemd hardening
 - [LLM request accounting](docs/llm.md) — Caddy setup, IP groups, per-day shares
+- [AMD XDNA NPU monitoring](docs/npu.md) — accel telemetry, contexts, power mode
 - [Migration to 1.3](docs/migration-1.3.md) — Ollama removal and entity changes
 - [Idle detection](docs/idle_logic.md) — detailed idle-state logic
 - [Changelog](CHANGELOG.md)
@@ -326,6 +328,10 @@ This project is compatible with [HACS](https://hacs.xyz/) (Home Assistant Commun
 *   **LLM Requests** (if enabled):
     *   Total and today request counts, today's energy and cost
     *   Per-group counts and shares, per-IP counts with the share as an attribute
+*   **NPU** (if enabled; the presence sensor and mode select always exist, the rest appear with the device):
+    *   NPU Present, power, column utilization, MP-NPU and H clocks, TOPs, active contexts
+    *   Firmware and power state as diagnostics
+    *   NPU Power Mode select entity (default/low/medium/high/turbo)
 *   **System Information** (diagnostic): Kernel, OS, CPU model, total RAM, daemon version
 
 ### API Control
@@ -428,6 +434,11 @@ The daemon supports a JSON configuration file. The full reference is in [Configu
     "enabled": true,
     "poll_interval": "5s"
   },
+  "npu": {
+    "enabled": false,
+    "poll_interval": "15s",
+    "device": ""
+  },
   "metrics": {
     "persist": true,
     "state_file": "/var/lib/framework-powerd/metrics.json",
@@ -472,6 +483,9 @@ The daemon supports a JSON configuration file. The full reference is in [Configu
 | `nvme.crit_temperature_c` | Temp Critical | int | `80` | Temperature critical (°C) |
 | `gpu.enabled` | Enabled | bool | `false` | Enable GPU monitoring |
 | `gpu.poll_interval` | Poll Interval | duration | `5s` | GPU polling frequency |
+| `npu.enabled` | Enabled | bool | `false` | Enable AMD XDNA NPU monitoring |
+| `npu.poll_interval` | Poll Interval | duration | `15s` | NPU query interval (wakes the device) |
+| `npu.device` | Device | string | `""` | Accel device node; empty auto-detects |
 | `metrics.persist` | Persist | bool | `true` | Persist energy aggregates across restarts |
 | `metrics.state_file` | State File | string | `/var/lib/framework-powerd/metrics.json` | Atomic JSON state path |
 | `metrics.save_interval` | Save Interval | duration | `5m` | Periodic flush interval |

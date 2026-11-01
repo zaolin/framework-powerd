@@ -227,3 +227,13 @@ framework-powerd serve --debug
 
 Or add `--debug` to `ExecStart` in a drop-in unit. Debug mode logs device
 hotplug, input activity and failed optional sysfs writes.
+
+## NPU sensors are missing or show zero
+
+`monitors.npu` in `/healthz` tells you which case applies. `absent` means no
+`amdxdna` device was found; check `lspci -nn | grep 17f0` and
+`ls /sys/class/accel`. `error` means the device node could not be queried or its
+sysfs entry could not be read.
+Zero power and utilization are normal while nothing runs on the NPU: models
+served through ROCm use the iGPU, not the NPU. See
+[AMD XDNA NPU Monitoring](npu.md).

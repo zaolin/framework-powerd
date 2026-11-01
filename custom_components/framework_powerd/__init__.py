@@ -17,7 +17,7 @@ from homeassistant.helpers.update_coordinator import (
     UpdateFailed,
 )
 
-from .const import DOMAIN, CONF_NOTIFY_SERVICE
+from .const import DOMAIN, CONF_NOTIFY_SERVICE, NPU_POWER_MODES
 
 SERVICE_SET_MODE = "set_mode"
 SERVICE_RESET_IDLE = "reset_idle"
@@ -231,6 +231,13 @@ class FrameworkPowerCoordinator(DataUpdateCoordinator):
         if mode not in ("performance", "powersave"):
             raise HomeAssistantError(f"Unsupported mode: {mode}")
         await self._async_post("/mode", {"mode": mode})
+        await self.async_request_refresh()
+
+    async def async_set_npu_power_mode(self, mode: str) -> None:
+        """Set the AMD XDNA NPU power mode."""
+        if mode not in NPU_POWER_MODES:
+            raise HomeAssistantError(f"Unsupported NPU power mode: {mode}")
+        await self._async_post("/npu/power-mode", {"mode": mode})
         await self.async_request_refresh()
 
     async def async_reset_idle(self) -> None:

@@ -11,3 +11,6 @@ CONF_NOTIFY_SERVICE = "notify_service"
 DEFAULT_NAME = "Framework Power"
 DEFAULT_HOST = "localhost"
 DEFAULT_PORT = 8080
+
+# Power modes exposed by the AMD XDNA driver, in driver enum order.
+NPU_POWER_MODES = ["default", "low", "medium", "high", "turbo"]

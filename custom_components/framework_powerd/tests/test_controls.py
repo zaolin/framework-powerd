@@ -90,3 +90,45 @@ class TestServices:
 
         asyncio.run(_async_register_services(hass))
         hass.services.async_register.assert_not_called()
+
+
+class TestNpuPowerModeSelect:
+    """Test the NPU power mode select entity."""
+
+    def test_options_and_current(self, mock_coordinator):
+        from custom_components.framework_powerd.select import (
+            FrameworkPowerNpuPowerModeSelect,
+        )
+
+        entity = FrameworkPowerNpuPowerModeSelect(mock_coordinator)
+        assert entity.options == ["default", "low", "medium", "high", "turbo"]
+        assert entity.current_option == "default"
+        assert entity._attr_unique_id == "npu_power_mode_select"
+        assert entity.available is True
+
+    def test_unknown_mode_is_ignored(self, mock_coordinator):
+        from custom_components.framework_powerd.select import (
+            FrameworkPowerNpuPowerModeSelect,
+        )
+
+        mock_coordinator.data["npu"]["power_mode"] = "warp"
+        assert FrameworkPowerNpuPowerModeSelect(mock_coordinator).current_option is None
+
+    def test_absent_npu_is_unavailable(self, mock_coordinator):
+        from custom_components.framework_powerd.select import (
+            FrameworkPowerNpuPowerModeSelect,
+        )
+
+        mock_coordinator.data["npu"]["present"] = False
+        entity = FrameworkPowerNpuPowerModeSelect(mock_coordinator)
+        assert entity.available is False
+
+    def test_select_option_calls_coordinator(self, mock_coordinator):
+        from custom_components.framework_powerd.select import (
+            FrameworkPowerNpuPowerModeSelect,
+        )
+
+        mock_coordinator.async_set_npu_power_mode = AsyncMock()
+        entity = FrameworkPowerNpuPowerModeSelect(mock_coordinator)
+        asyncio.run(entity.async_select_option("high"))
+        mock_coordinator.async_set_npu_power_mode.assert_awaited_once_with("high")

@@ -4,6 +4,28 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 semantic versioning.
 
+## [1.7.0] - 2026-11-01
+
+### Added
+
+- AMD XDNA NPU monitoring in `internal/npu`. The daemon reads the accel
+  device's telemetry through `DRM_IOCTL_AMDXDNA_GET_INFO`: NPU power draw,
+  per-column AIE utilization, MP-NPU and H clocks, TOPs and task counters,
+  the hardware contexts with their owning PIDs, and the firmware version.
+- `npu` configuration section with auto-detection of `/dev/accel/accel*`, an
+  optional explicit device and a poll interval (default 15 s). A missing NPU
+  is reported as `absent`, not as an error.
+- `GET /npu/stats` and `POST /npu/power-mode`, plus an `npu` block in
+  `GET /status` and `monitors.npu` in `/healthz`.
+- Home Assistant sensors for NPU power, column utilization, clocks, TOPs,
+  active contexts and firmware, an NPU Present binary sensor, and an NPU Power
+  Mode select entity.
+
+### Changed
+
+- `/healthz` reports `degraded` when the NPU monitor hits a read error. A
+  missing device (`absent`) does not degrade the status.
+
 ## [1.6.0] - 2026-10-21
 
 ### Added

@@ -30,6 +30,7 @@ type Config struct {
 	Smartd      SmartdConfig      `json:"smartd"`
 	NVMe        NVMeConfig        `json:"nvme"`
 	GPU         GPUConfig         `json:"gpu"`
+	NPU         NPUConfig         `json:"npu"`
 	Peripherals PeripheralsConfig `json:"peripherals"`
 	Metrics     MetricsConfig     `json:"metrics"`
 	LLM         LLMConfig         `json:"llm"`
@@ -164,6 +165,43 @@ func (n *NVMeConfig) Validate() error {
 type GPUConfig struct {
 	Enabled      bool   `json:"enabled"`
 	PollInterval string `json:"poll_interval"`
+}
+
+// NPUConfig contains AMD XDNA NPU monitoring settings.
+type NPUConfig struct {
+	Enabled      bool   `json:"enabled"`
+	PollInterval string `json:"poll_interval"`
+	// Device is the accel device node. Empty means auto-detect.
+	Device string `json:"device"`
+}
+
+// GetPollInterval parses the NPU poll interval.
+func (n *NPUConfig) GetPollInterval() time.Duration {
+	d, err := time.ParseDuration(n.PollInterval)
+	if err != nil || d < time.Second {
+		return 15 * time.Second
+	}
+	return d
+}
+
+// Validate checks the NPU monitoring settings.
+func (n *NPUConfig) Validate() error {
+	if !n.Enabled {
+		return nil
+	}
+	if n.PollInterval != "" {
+		d, err := time.ParseDuration(n.PollInterval)
+		if err != nil {
+			return fmt.Errorf("npu.poll_interval %q is not a valid duration: %w", n.PollInterval, err)
+		}
+		if d < time.Second {
+			return fmt.Errorf("npu.poll_interval must be at least 1s, got %q", n.PollInterval)
+		}
+	}
+	if n.Device != "" && !strings.HasPrefix(n.Device, "/dev/accel/") {
+		return fmt.Errorf("npu.device %q must point into /dev/accel", n.Device)
+	}
+	return nil
 }
 
 // PeripheralsConfig holds optional overrides for the peripheral power estimator.
@@ -349,6 +387,10 @@ func DefaultConfig() *Config {
 		GPU: GPUConfig{
 			Enabled:      false,
 			PollInterval: "5s",
+		},
+		NPU: NPUConfig{
+			Enabled:      false,
+			PollInterval: "15s",
 		},
 		Metrics: MetricsConfig{
 			Persist:      true,

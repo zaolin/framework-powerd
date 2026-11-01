@@ -4,7 +4,7 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
-from .const import DOMAIN
+from .const import DOMAIN, NPU_POWER_MODES
 from .entity import FrameworkEntity
 
 TUNABLE_MODES = ["performance", "powersave"]
@@ -17,7 +17,12 @@ async def async_setup_entry(
 ) -> None:
     """Set up the select platform."""
     coordinator = hass.data[DOMAIN][entry.entry_id]
-    async_add_entities([FrameworkPowerTunableModeSelect(coordinator)])
+    async_add_entities(
+        [
+            FrameworkPowerTunableModeSelect(coordinator),
+            FrameworkPowerNpuPowerModeSelect(coordinator),
+        ]
+    )
 
 
 class FrameworkPowerTunableModeSelect(FrameworkEntity, SelectEntity):
@@ -39,3 +44,28 @@ class FrameworkPowerTunableModeSelect(FrameworkEntity, SelectEntity):
 
     async def async_select_option(self, option: str) -> None:
         await self.coordinator.async_set_mode(option)
+
+
+class FrameworkPowerNpuPowerModeSelect(FrameworkEntity, SelectEntity):
+    """Select the AMD XDNA NPU power mode."""
+
+    _attr_name = "NPU Power Mode"
+    _attr_unique_id = "npu_power_mode_select"
+    _attr_options = NPU_POWER_MODES
+    _attr_icon = "mdi:expansion-card"
+
+    @property
+    def _npu(self):
+        return (self.coordinator.data or {}).get("npu") or {}
+
+    @property
+    def available(self):
+        return bool(self._npu.get("present"))
+
+    @property
+    def current_option(self):
+        mode = self._npu.get("power_mode")
+        return mode if mode in self._attr_options else None
+
+    async def async_select_option(self, option: str) -> None:
+        await self.coordinator.async_set_npu_power_mode(option)

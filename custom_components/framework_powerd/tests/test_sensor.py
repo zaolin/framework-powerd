@@ -1,4 +1,5 @@
 """Tests for sensor entities."""
+
 import pytest
 from unittest.mock import MagicMock
 
@@ -9,14 +10,14 @@ class TestSmartdAlertsSensor:
     def test_native_value_returns_count(self, mock_coordinator):
         """Test that native_value returns count of alerts."""
         from custom_components.framework_powerd.sensor import SmartdAlertsSensor
-        
+
         sensor = SmartdAlertsSensor(mock_coordinator)
         assert sensor.native_value == 1
 
     def test_native_value_no_alerts(self, mock_coordinator):
         """Test native_value when no alerts."""
         from custom_components.framework_powerd.sensor import SmartdAlertsSensor
-        
+
         mock_coordinator.data["smartd"]["alerts"] = []
         sensor = SmartdAlertsSensor(mock_coordinator)
         assert sensor.native_value == 0
@@ -24,10 +25,10 @@ class TestSmartdAlertsSensor:
     def test_extra_state_attributes(self, mock_coordinator):
         """Test extra_state_attributes contains alerts."""
         from custom_components.framework_powerd.sensor import SmartdAlertsSensor
-        
+
         sensor = SmartdAlertsSensor(mock_coordinator)
         attrs = sensor.extra_state_attributes
-        
+
         assert "alerts" in attrs
         assert len(attrs["alerts"]) == 1
         assert attrs["alerts"][0]["device"] == "/dev/sda"
@@ -39,38 +40,38 @@ class TestSmartdDeviceSensor:
     def test_native_value_on_when_alert(self, mock_coordinator):
         """Test native_value is 1 when alert exists for device."""
         from custom_components.framework_powerd.sensor import SmartdDeviceSensor
-        
+
         sensor = SmartdDeviceSensor(mock_coordinator, "/dev/sda")
         assert sensor.native_value == 1
 
     def test_native_value_off_when_no_alert(self, mock_coordinator):
         """Test native_value is 0 when no alert for device."""
         from custom_components.framework_powerd.sensor import SmartdDeviceSensor
-        
+
         sensor = SmartdDeviceSensor(mock_coordinator, "/dev/sdb")
         assert sensor.native_value == 0
 
     def test_dynamic_name(self, mock_coordinator):
         """Test name includes device name."""
         from custom_components.framework_powerd.sensor import SmartdDeviceSensor
-        
+
         sensor = SmartdDeviceSensor(mock_coordinator, "/dev/sda")
         assert sensor.name == "SMART /dev/sda"
 
     def test_unique_id(self, mock_coordinator):
         """Test unique_id is generated correctly."""
         from custom_components.framework_powerd.sensor import SmartdDeviceSensor
-        
+
         sensor = SmartdDeviceSensor(mock_coordinator, "/dev/sda")
         assert sensor._attr_unique_id == "smartd__dev_sda"
 
     def test_extra_state_attributes_device_alerts(self, mock_coordinator):
         """Test extra_state_attributes for specific device."""
         from custom_components.framework_powerd.sensor import SmartdDeviceSensor
-        
+
         sensor = SmartdDeviceSensor(mock_coordinator, "/dev/sda")
         attrs = sensor.extra_state_attributes
-        
+
         assert "alerts" in attrs
         assert len(attrs["alerts"]) == 1
         assert attrs["alerts"][0]["device"] == "/dev/sda"
@@ -327,9 +328,7 @@ class TestRAMMemorySensors:
         from custom_components.framework_powerd.sensor import RAMUsageSensor
 
         sensor = RAMUsageSensor(mock_coordinator)
-        expected = round(
-            mock_coordinator.data["memory"]["used_percent"], 1
-        )
+        expected = round(mock_coordinator.data["memory"]["used_percent"], 1)
         assert sensor.native_value == expected
 
     def test_missing_memory_returns_zero(self, mock_coordinator):
@@ -428,7 +427,9 @@ class TestGPUTTGSensors:
         del mock_coordinator.data["gpu"]["gtt_free_bytes"]
         sensor = GPUTTGFreeSensor(mock_coordinator)
         gpu = mock_coordinator.data["gpu"]
-        expected = round((gpu["gtt_total_bytes"] - gpu["gtt_used_bytes"]) / (1024**3), 2)
+        expected = round(
+            (gpu["gtt_total_bytes"] - gpu["gtt_used_bytes"]) / (1024**3), 2
+        )
         assert sensor.native_value == expected
 
     def test_gtt_usage(self, mock_coordinator):
@@ -553,6 +554,7 @@ class TestDaemonHealthSensor:
         assert attrs["turbostat"] == "ok"
         assert attrs["nvme"] == "ok"
         assert attrs["llm"] == "ok"
+        assert attrs["npu"] == "ok"
         assert attrs["metrics_state"]["enabled"] is True
 
     def test_llm_error_is_visible(self, mock_coordinator):
@@ -764,3 +766,94 @@ class TestLLMEntityFactory:
 
         extra = build_llm_entities(mock_coordinator, registered)
         assert not [e for e in extra if type(e).__name__ == "LLMIPRequestsSensor"]
+
+
+class TestNPUSensors:
+    """Test the AMD XDNA NPU sensors."""
+
+    def test_power(self, mock_coordinator):
+        from custom_components.framework_powerd.sensor import NpuPowerSensor
+
+        sensor = NpuPowerSensor(mock_coordinator)
+        assert sensor.native_value == 2.5
+        assert sensor.available is True
+
+    def test_column_utilization(self, mock_coordinator):
+        from custom_components.framework_powerd.sensor import NpuColumnUtilizationSensor
+
+        sensor = NpuColumnUtilizationSensor(mock_coordinator)
+        assert sensor.native_value == 16.7
+        attrs = sensor.extra_state_attributes
+        assert attrs["max"] == 40
+        assert attrs["columns"] == [10, 20, 30, 40, 0, 0]
+
+    def test_clocks(self, mock_coordinator):
+        from custom_components.framework_powerd.sensor import (
+            NpuHClockSensor,
+            NpuMPNPUClockSensor,
+        )
+
+        assert NpuMPNPUClockSensor(mock_coordinator).native_value == 1204
+        h_clock = NpuHClockSensor(mock_coordinator)
+        assert h_clock.native_value == 1711
+        assert h_clock.extra_state_attributes["max_mhz"] == 1800
+
+    def test_tops_and_contexts(self, mock_coordinator):
+        from custom_components.framework_powerd.sensor import (
+            NpuActiveContextsSensor,
+            NpuTOPsSensor,
+        )
+
+        tops = NpuTOPsSensor(mock_coordinator)
+        assert tops.native_value == 56
+        assert tops.extra_state_attributes["max"] == 58
+
+        contexts = NpuActiveContextsSensor(mock_coordinator)
+        assert contexts.native_value == 1
+        assert contexts.extra_state_attributes["contexts"][0]["pid"] == 4242
+
+    def test_diagnostic_strings(self, mock_coordinator):
+        from custom_components.framework_powerd.sensor import (
+            NpuFirmwareSensor,
+            NpuPowerStateSensor,
+        )
+
+        assert NpuFirmwareSensor(mock_coordinator).native_value == "1.0.0.63"
+        assert NpuPowerStateSensor(mock_coordinator).native_value == "D3hot"
+
+    def test_absent_npu_is_unavailable(self, mock_coordinator):
+        from custom_components.framework_powerd.sensor import NpuPowerSensor
+
+        mock_coordinator.data["npu"]["present"] = False
+        assert NpuPowerSensor(mock_coordinator).available is False
+
+
+class TestNPUEntityBuilder:
+    """Test the NPU sensor factory."""
+
+    def test_builds_the_sensor_set_when_present(self, mock_coordinator):
+        from custom_components.framework_powerd.sensor import build_npu_entities
+
+        entities = build_npu_entities(mock_coordinator)
+        assert sorted(type(e).__name__ for e in entities) == [
+            "NpuActiveContextsSensor",
+            "NpuColumnUtilizationSensor",
+            "NpuFirmwareSensor",
+            "NpuHClockSensor",
+            "NpuMPNPUClockSensor",
+            "NpuPowerSensor",
+            "NpuPowerStateSensor",
+            "NpuTOPsSensor",
+        ]
+
+    def test_no_entities_when_absent(self, mock_coordinator):
+        from custom_components.framework_powerd.sensor import build_npu_entities
+
+        mock_coordinator.data["npu"]["present"] = False
+        assert build_npu_entities(mock_coordinator) == []
+
+    def test_no_entities_without_block(self, mock_coordinator):
+        from custom_components.framework_powerd.sensor import build_npu_entities
+
+        del mock_coordinator.data["npu"]
+        assert build_npu_entities(mock_coordinator) == []

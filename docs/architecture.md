@@ -51,6 +51,7 @@ flowchart TD
         NVMe["NVMe monitor"]
         Mem["memory collector"]
         LLM["LLM access-log tailer"]
+        NPU["NPU accel monitor"]
     end
 
     Turbo --> PowerMon["Power monitor"]
@@ -64,6 +65,8 @@ flowchart TD
     Mem --> Status
     CaddyLog[("caddy access log")] --> LLM
     LLM --> Status
+    AccelDev[("/dev/accel/accel0")] --> NPU
+    NPU --> Status
     API --> Status
     Status --> HA["Home Assistant integration"]
     HA -->|"select / button / services"| API
@@ -74,8 +77,8 @@ callbacks take a mutex, so idle, remote-play, Steam and API events cannot
 interleave mode changes or pause/resume operations.
 
 The API exposes `/status` (including a `health` block and `tunable_mode`),
-`/healthz`, `/mode`, `/activity`, `/smartd/stats`, `/nvme/stats` and
-`/llm/stats`. The Home
+`/healthz`, `/mode`, `/activity`, `/smartd/stats`, `/nvme/stats`, `/llm/stats`
+and `/npu/stats`, plus `POST /npu/power-mode`. The Home
 Assistant integration polls `/status`, creates notifications from SMART/NVMe
 warnings, and can call `/mode` and `/activity` through its select entity,
 button and services.
@@ -146,7 +149,8 @@ Startup order:
 3. Start idle, Remote Play, Steam and power monitors.
 4. Restore persisted metrics and alerts, then start turbostat and the
    persistence loops.
-5. Start optional SMART, NVMe and GPU monitors.
+5. Start optional SMART, NVMe, LLM, NPU and GPU monitors. The NPU monitor keeps
+   watching for the device if it is not present yet.
 6. Bind the HTTP listener, send systemd `READY=1`, start watchdog pings.
 
 Shutdown order:

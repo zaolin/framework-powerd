@@ -84,6 +84,31 @@ Only present when `gpu.enabled` is true.
 VRAM, GTT and RAM are all rendered in GiB. If the daemon is too old to send
 `*_free_bytes` or `*_used_percent`, the integration derives them from used/total.
 
+### NPU
+
+The telemetry sensors appear when `npu.enabled` is true and an AMD XDNA device
+is detected. The presence binary sensor and the power-mode select always exist
+when NPU monitoring is enabled. See [AMD XDNA NPU Monitoring](npu.md).
+
+| Entity | Unit | Source |
+|---|---|---|
+| NPU Present | binary sensor | `npu.present` |
+| NPU Power | W | `npu.power_watts` |
+| NPU Column Utilization | % | `npu.column_utilization_avg` |
+| NPU MP-NPU Clock | MHz | `npu.mp_npu_clock_mhz` |
+| NPU H Clock | MHz | `npu.h_clock_mhz` |
+| NPU TOPs | count | `npu.tops_current` |
+| NPU Active Contexts | count | number of `npu.contexts` |
+| NPU Firmware | text | `npu.firmware_version` |
+| NPU Power State | text | `npu.power_state` |
+| NPU Power Mode | select | `npu.power_mode` |
+
+`NPU Present` always exists and reports off while no device is detected. The
+NPU Power Mode select also always exists, but stays unavailable without a
+device. The remaining NPU sensors are only created when an NPU is present. The column sensor exposes the per-column percentages and the
+maximum as attributes. The context sensor exposes the full context table, including the
+owning PID, so you can see which process is using the NPU.
+
 ### SMART
 
 Only present when `smartd.enabled` is true.
@@ -224,6 +249,11 @@ entities:
   - sensor.llm_requests_today
   - sensor.llm_energy_today
   - sensor.llm_cost_today
+  - binary_sensor.npu_present
+  - sensor.npu_power
+  - sensor.npu_column_utilization
+  - sensor.npu_tops
+  - select.framework_power_daemon_npu_power_mode
   - select.framework_power_daemon_power_tunable_mode
   - button.framework_power_daemon_reset_idle_timer
   - binary_sensor.storage_health
@@ -244,6 +274,8 @@ Entity IDs depend on your naming; check Developer Tools → States after setup.
   Check the daemon logs and `/healthz` on the daemon host.
 - RAM/GPU sensors missing: update the daemon first. The integration creates them
   when the fields appear in `/status`.
+- NPU entities missing: the daemon only creates them when `npu.enabled` is true
+  and an `amdxdna` device was found. Check `monitors.npu` in `/healthz`.
 - GTT totals are large: GTT is shared system memory, not dedicated VRAM.
 
 See [Troubleshooting](troubleshooting.md) for daemon-side issues.

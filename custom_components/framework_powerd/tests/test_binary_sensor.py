@@ -93,3 +93,47 @@ class TestStorageHealthBinarySensor:
         from custom_components.framework_powerd.binary_sensor import StorageHealthBinarySensor
 
         assert StorageHealthBinarySensor(mock_coordinator)._attr_unique_id == "storage_health"
+
+
+class TestNpuPresentBinarySensor:
+    """Test the NPU presence binary sensor."""
+
+    def test_present(self, mock_coordinator):
+        from custom_components.framework_powerd.binary_sensor import (
+            NpuPresentBinarySensor,
+        )
+
+        sensor = NpuPresentBinarySensor(mock_coordinator)
+        assert sensor.is_on is True
+        assert sensor.available is True
+
+    def test_absent(self, mock_coordinator):
+        from custom_components.framework_powerd.binary_sensor import (
+            NpuPresentBinarySensor,
+        )
+
+        mock_coordinator.data["npu"]["present"] = False
+        assert NpuPresentBinarySensor(mock_coordinator).is_on is False
+
+    def test_no_npu_block(self, mock_coordinator):
+        from custom_components.framework_powerd.binary_sensor import (
+            NpuPresentBinarySensor,
+        )
+
+        del mock_coordinator.data["npu"]
+        sensor = NpuPresentBinarySensor(mock_coordinator)
+        assert sensor.available is False
+
+
+class TestNpuPresentBinarySensorAvailability:
+    """The presence sensor stays available so it can report the device leaving."""
+
+    def test_available_even_when_absent(self, mock_coordinator):
+        from custom_components.framework_powerd.binary_sensor import (
+            NpuPresentBinarySensor,
+        )
+
+        mock_coordinator.data["npu"]["present"] = False
+        sensor = NpuPresentBinarySensor(mock_coordinator)
+        assert sensor.available is True
+        assert sensor.is_on is False

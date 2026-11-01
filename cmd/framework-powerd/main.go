@@ -23,6 +23,7 @@ import (
 	"github.com/zaolin/framework-powerd/internal/gpu"
 	"github.com/zaolin/framework-powerd/internal/llm"
 	"github.com/zaolin/framework-powerd/internal/monitor"
+	"github.com/zaolin/framework-powerd/internal/npu"
 	"github.com/zaolin/framework-powerd/internal/nvme"
 	"github.com/zaolin/framework-powerd/internal/peripherals"
 	"github.com/zaolin/framework-powerd/internal/power"
@@ -131,6 +132,9 @@ func runServer() {
 		if err := cfg.Pricing.Validate(); err != nil {
 			log.Fatalf("Invalid configuration: %v", err)
 		}
+	}
+	if err := cfg.NPU.Validate(); err != nil {
+		log.Fatalf("Invalid configuration: %v", err)
 	}
 
 	sysinfo.DaemonVersion = version
@@ -449,11 +453,25 @@ func runServer() {
 		}
 	}
 
+	// Start NPU Monitor (if enabled)
+	var npuMonitor *npu.Monitor
+	if cfg.NPU.Enabled {
+		npuMonitor = npu.NewMonitor(cfg.NPU)
+		if npuMonitor.Present() {
+			log.Println("NPU monitoring enabled")
+		} else {
+			log.Println("NPU monitoring enabled, watching for an AMD XDNA device")
+		}
+		npuCtx, npuCancel := context.WithCancel(context.Background())
+		defer npuCancel()
+		go npuMonitor.Start(npuCtx)
+	}
+
 	// Start API Server (S3+S8: dedicated mux, explicit timeouts, body limits)
 	// Collect static system info once at startup.
 	sysInfo := sysinfo.Collect()
 
-	apiServer := api.NewServer(pm, powerMon, jwtSecret, smartdMonitor, nvmeMonitor, llmMonitor, gpuMonitor, sysInfo)
+	apiServer := api.NewServer(pm, powerMon, jwtSecret, smartdMonitor, nvmeMonitor, llmMonitor, npuMonitor, gpuMonitor, sysInfo)
 
 	mux := http.NewServeMux()
 
@@ -464,6 +482,8 @@ func runServer() {
 	statsHandler := apiServer.AuthMiddleware(apiServer.HandleSmartdStats)
 	nvmeHandler := apiServer.AuthMiddleware(apiServer.HandleNVMeStats)
 	llmHandler := apiServer.AuthMiddleware(apiServer.HandleLLMStats)
+	npuHandler := apiServer.AuthMiddleware(apiServer.HandleNPUStats)
+	npuModeHandler := apiServer.AuthMiddleware(apiServer.RateLimit(apiServer.HandleNPUPowerMode))
 
 	// When auth is disabled (--disable-auth), AuthMiddleware passes through.
 	if authEnabled {
@@ -481,6 +501,8 @@ func runServer() {
 	mux.HandleFunc("/smartd/stats", statsHandler)
 	mux.HandleFunc("/nvme/stats", nvmeHandler)
 	mux.HandleFunc("/llm/stats", llmHandler)
+	mux.HandleFunc("/npu/stats", npuHandler)
+	mux.HandleFunc("/npu/power-mode", npuModeHandler)
 	// S8: 404 catch-all for unmatched paths.
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)

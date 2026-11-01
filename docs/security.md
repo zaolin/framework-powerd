@@ -47,8 +47,8 @@ leaves the control plane open. Only use it with `server.address=localhost`.
 
 ## Rate limiting
 
-`POST /mode` and `POST /activity` are limited to 1 request/second with a burst
-of 5 per client IP. The limiter keys on the IP, not the TCP source port, so
+`POST /mode`, `POST /activity` and `POST /npu/power-mode` are limited to 1
+request/second with a burst of 5 per client IP. The limiter keys on the IP, not the TCP source port, so
 opening new connections does not bypass it. Idle buckets are pruned.
 
 ## systemd hardening

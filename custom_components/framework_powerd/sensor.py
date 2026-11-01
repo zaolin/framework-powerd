@@ -7,6 +7,7 @@ from homeassistant.components.sensor import (
 )
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import (
+    UnitOfFrequency,
     UnitOfInformation,
     UnitOfPower,
     UnitOfEnergy,
@@ -65,6 +66,9 @@ async def async_setup_entry(
             GPUTTGUsageSensor(coord),
             GPUCPUUsageSensor(coord),
         ]
+
+    def _npu_entities(coord):
+        return build_npu_entities(coord)
 
     def _nvme_entities(coord):
         entities = []
@@ -126,6 +130,11 @@ async def async_setup_entry(
     if llm_data:
         entities.extend(_llm_entities(coordinator))
 
+    # Add AMD XDNA NPU sensors when the device is present
+    npu_data = coordinator.data.get("npu", {})
+    if npu_data.get("present"):
+        entities.extend(_npu_entities(coordinator))
+
     async_add_entities(entities)
 
     # A11: dynamic factories for blocks that may not exist at setup time
@@ -148,12 +157,17 @@ async def async_setup_entry(
     def _llm_sensors_factory(coord):
         return _llm_entities(coord)
 
+    def _npu_sensors_factory(coord):
+        return _npu_entities(coord)
+
     if not memory_data:
         coordinator.register_entity_factory(_memory_sensors_factory)
     if not gpu_data:
         coordinator.register_entity_factory(_gpu_sensors_factory)
     if not nvme_data.get("devices"):
         coordinator.register_entity_factory(_nvme_sensors_factory)
+    if not npu_data.get("present"):
+        coordinator.register_entity_factory(_npu_sensors_factory)
     coordinator.register_entity_factory(_llm_sensors_factory, persistent=True)
 
     # A11: register a dynamic factory so per-device SMART alert entities appear
@@ -858,6 +872,7 @@ class DaemonHealthSensor(FrameworkEntity, SensorEntity):
             "smartd": monitors.get("smartd"),
             "nvme": monitors.get("nvme"),
             "llm": monitors.get("llm"),
+            "npu": monitors.get("npu"),
             "gpu": monitors.get("gpu"),
             "llm_last_error": (self.coordinator.data.get("llm") or {}).get(
                 "last_error"
@@ -866,6 +881,182 @@ class DaemonHealthSensor(FrameworkEntity, SensorEntity):
             "memory_used_percent": health.get("memory_used_percent"),
             "metrics_state": health.get("metrics_state"),
         }
+
+
+# AMD XDNA NPU Sensors
+
+
+class NpuSensorBase(FrameworkEntity, SensorEntity):
+    """Base class for AMD XDNA NPU sensors."""
+
+    @property
+    def _npu(self):
+        return self.coordinator.data.get("npu") or {}
+
+    @property
+    def available(self):
+        return bool(self._npu.get("present"))
+
+
+class NpuPowerSensor(NpuSensorBase):
+    """NPU power draw reported by the platform telemetry."""
+
+    _attr_name = "NPU Power"
+    _attr_unique_id = "npu_power"
+    _attr_device_class = SensorDeviceClass.POWER
+    _attr_native_unit_of_measurement = UnitOfPower.WATT
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_suggested_display_precision = 3
+    _attr_icon = "mdi:expansion-card"
+
+    @property
+    def native_value(self):
+        return round(self._npu.get("power_watts", 0), 3)
+
+
+class NpuColumnUtilizationSensor(NpuSensorBase):
+    """Mean AIE column utilization, with the per-column values as attributes."""
+
+    _attr_name = "NPU Column Utilization"
+    _attr_unique_id = "npu_column_utilization"
+    _attr_native_unit_of_measurement = "%"
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_suggested_display_precision = 1
+    _attr_icon = "mdi:chart-bar"
+
+    @property
+    def native_value(self):
+        return round(self._npu.get("column_utilization_avg", 0), 1)
+
+    @property
+    def extra_state_attributes(self):
+        return {
+            "max": self._npu.get("column_utilization_max", 0),
+            "columns": self._npu.get("column_utilization", []),
+        }
+
+
+class NpuMPNPUClockSensor(NpuSensorBase):
+    """Current MP-NPU clock."""
+
+    _attr_name = "NPU MP-NPU Clock"
+    _attr_unique_id = "npu_mp_npu_clock"
+    _attr_device_class = SensorDeviceClass.FREQUENCY
+    _attr_native_unit_of_measurement = UnitOfFrequency.MEGAHERTZ
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+    _attr_icon = "mdi:sine-wave"
+
+    @property
+    def native_value(self):
+        return self._npu.get("mp_npu_clock_mhz", 0)
+
+
+class NpuHClockSensor(NpuSensorBase):
+    """Current H clock."""
+
+    _attr_name = "NPU H Clock"
+    _attr_unique_id = "npu_h_clock"
+    _attr_device_class = SensorDeviceClass.FREQUENCY
+    _attr_native_unit_of_measurement = UnitOfFrequency.MEGAHERTZ
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+    _attr_icon = "mdi:sine-wave"
+
+    @property
+    def native_value(self):
+        return self._npu.get("h_clock_mhz", 0)
+
+    @property
+    def extra_state_attributes(self):
+        return {"max_mhz": self._npu.get("npu_clk_max_mhz", 0)}
+
+
+class NpuTOPsSensor(NpuSensorBase):
+    """Current TOPs, with the device maximum as an attribute."""
+
+    _attr_name = "NPU TOPs"
+    _attr_unique_id = "npu_tops"
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_suggested_display_precision = 0
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+    _attr_icon = "mdi:speedometer"
+
+    @property
+    def native_value(self):
+        return self._npu.get("tops_current", 0)
+
+    @property
+    def extra_state_attributes(self):
+        return {"max": self._npu.get("tops_max", 0)}
+
+
+class NpuActiveContextsSensor(NpuSensorBase):
+    """Number of hardware contexts currently allocated on the NPU."""
+
+    _attr_name = "NPU Active Contexts"
+    _attr_unique_id = "npu_active_contexts"
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+    _attr_icon = "mdi:account-multiple"
+
+    @property
+    def native_value(self):
+        return len(self._npu.get("contexts") or [])
+
+    @property
+    def extra_state_attributes(self):
+        return {
+            "max": self._npu.get("tasks_max", 0),
+            "contexts": self._npu.get("contexts") or [],
+        }
+
+
+class NpuFirmwareSensor(NpuSensorBase):
+    """NPU firmware version."""
+
+    _attr_name = "NPU Firmware"
+    _attr_unique_id = "npu_firmware"
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+    _attr_icon = "mdi:chip"
+
+    @property
+    def native_value(self):
+        return self._npu.get("firmware_version") or "unknown"
+
+
+class NpuPowerStateSensor(NpuSensorBase):
+    """NPU PCI power state (D0 while active, D3hot while suspended)."""
+
+    _attr_name = "NPU Power State"
+    _attr_unique_id = "npu_power_state"
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+    _attr_icon = "mdi:power-plug"
+
+    @property
+    def native_value(self):
+        return self._npu.get("power_state") or "unknown"
+
+
+def build_npu_entities(coord):
+    """Return the NPU sensors for a coordinator snapshot.
+
+    An absent or disabled NPU yields no entities; the presence binary sensor and
+    the power-mode select live in their own platforms.
+    """
+    npu = (coord.data or {}).get("npu") or {}
+    if not npu.get("present"):
+        return []
+    return [
+        NpuPowerSensor(coord),
+        NpuColumnUtilizationSensor(coord),
+        NpuMPNPUClockSensor(coord),
+        NpuHClockSensor(coord),
+        NpuTOPsSensor(coord),
+        NpuActiveContextsSensor(coord),
+        NpuFirmwareSensor(coord),
+        NpuPowerStateSensor(coord),
+    ]
 
 
 # LLM Request Accounting Sensors

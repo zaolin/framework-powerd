@@ -13,6 +13,7 @@ import (
 
 	"github.com/zaolin/framework-powerd/internal/gpu"
 	"github.com/zaolin/framework-powerd/internal/llm"
+	"github.com/zaolin/framework-powerd/internal/npu"
 	"github.com/zaolin/framework-powerd/internal/nvme"
 	"github.com/zaolin/framework-powerd/internal/power"
 	"github.com/zaolin/framework-powerd/internal/smartd"
@@ -51,6 +52,7 @@ type StatusResponse struct {
 	NVMe             *nvme.Stats                 `json:"nvme,omitempty"`
 	LLM              *llm.Stats                  `json:"llm,omitempty"`
 	GPU              *gpu.Stats                  `json:"gpu,omitempty"`
+	NPU              *npu.Stats                  `json:"npu,omitempty"`
 	SystemInfo       sysinfo.SystemInfo          `json:"system_info"`
 	Health           HealthResponse              `json:"health"`
 }
@@ -61,6 +63,7 @@ type MonitorHealth struct {
 	Smartd    bool   `json:"smartd"`
 	NVMe      string `json:"nvme"` // disabled | ok | warning | critical
 	LLM       string `json:"llm"`  // disabled | ok | waiting | error
+	NPU       string `json:"npu"`  // disabled | absent | ok | waiting | error
 	GPU       bool   `json:"gpu"`
 }
 
@@ -84,6 +87,7 @@ type Server struct {
 	nvmeMonitor   *nvme.Monitor
 	llmMonitor    *llm.Monitor
 	gpuMonitor    *gpu.Monitor
+	npuMonitor    *npu.Monitor
 	jwtSecret     []byte
 	sysInfo       sysinfo.SystemInfo
 	startedAt     time.Time
@@ -94,7 +98,7 @@ type Server struct {
 }
 
 // NewServer creates a new API server
-func NewServer(pm *power.PowerManager, monitor *power.PowerMonitor, jwtSecret string, smartdMon *smartd.Monitor, nvmeMon *nvme.Monitor, llmMon *llm.Monitor, gpuMon *gpu.Monitor, sysInfo sysinfo.SystemInfo) *Server {
+func NewServer(pm *power.PowerManager, monitor *power.PowerMonitor, jwtSecret string, smartdMon *smartd.Monitor, nvmeMon *nvme.Monitor, llmMon *llm.Monitor, npuMon *npu.Monitor, gpuMon *gpu.Monitor, sysInfo sysinfo.SystemInfo) *Server {
 	return &Server{
 		pm:            pm,
 		powerMonitor:  monitor,
@@ -102,6 +106,7 @@ func NewServer(pm *power.PowerManager, monitor *power.PowerMonitor, jwtSecret st
 		nvmeMonitor:   nvmeMon,
 		llmMonitor:    llmMon,
 		gpuMonitor:    gpuMon,
+		npuMonitor:    npuMon,
 		jwtSecret:     []byte(jwtSecret),
 		sysInfo:       sysInfo,
 		startedAt:     time.Now(),
@@ -306,6 +311,10 @@ func (s *Server) HandleStatus(w http.ResponseWriter, r *http.Request) {
 		stats := s.gpuMonitor.GetStats()
 		resp.GPU = &stats
 	}
+	if s.npuMonitor != nil {
+		stats := s.npuMonitor.GetStats()
+		resp.NPU = &stats
+	}
 
 	resp.Health = s.buildHealth(status.IsIdle)
 
@@ -340,7 +349,12 @@ func (s *Server) buildHealth(isIdle bool) HealthResponse {
 		llmHealth = s.llmMonitor.Health()
 	}
 
-	status := healthStatus(turbostat, time.Since(s.startedAt), metrics.LastError, llmHealth, nvmeHealth)
+	npuHealth := "disabled"
+	if s.npuMonitor != nil {
+		npuHealth = s.npuMonitor.Health()
+	}
+
+	status := healthStatus(turbostat, time.Since(s.startedAt), metrics.LastError, llmHealth, npuHealth, nvmeHealth)
 
 	return HealthResponse{
 		Status:                status,
@@ -354,6 +368,7 @@ func (s *Server) buildHealth(isIdle bool) HealthResponse {
 			Smartd:    s.smartdMonitor != nil,
 			NVMe:      nvmeHealth,
 			LLM:       llmHealth,
+			NPU:       npuHealth,
 			GPU:       s.gpuMonitor != nil,
 		},
 		MetricsState: metrics,
@@ -362,11 +377,12 @@ func (s *Server) buildHealth(isIdle bool) HealthResponse {
 
 // healthStatus derives the overall status from the individual monitors.
 // turbostat "waiting" is tolerated during the first 30 seconds of uptime.
-func healthStatus(turbostat string, uptime time.Duration, metricsErr, llmHealth, nvmeHealth string) string {
+func healthStatus(turbostat string, uptime time.Duration, metricsErr, llmHealth, npuHealth, nvmeHealth string) string {
 	if turbostat == "stale" ||
 		(turbostat == "waiting" && uptime > 30*time.Second) ||
 		metricsErr != "" ||
 		llmHealth == "error" ||
+		npuHealth == "error" ||
 		(nvmeHealth != "disabled" && nvmeHealth != nvme.HealthOK) {
 		return "degraded"
 	}
@@ -413,6 +429,54 @@ func (s *Server) HandleSmartdStats(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, s.smartdMonitor.GetStats())
+}
+
+// HandleNPUStats returns the NPU telemetry snapshot.
+func (s *Server) HandleNPUStats(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if s.npuMonitor == nil {
+		http.Error(w, "NPU monitoring not enabled", http.StatusNotFound)
+		return
+	}
+
+	writeJSON(w, http.StatusOK, s.npuMonitor.GetStats())
+}
+
+// npuPowerModeRequest is the body of POST /npu/power-mode.
+type npuPowerModeRequest struct {
+	Mode string `json:"mode"`
+}
+
+// HandleNPUPowerMode switches the NPU power mode.
+func (s *Server) HandleNPUPowerMode(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if s.npuMonitor == nil {
+		http.Error(w, "NPU monitoring not enabled", http.StatusNotFound)
+		return
+	}
+
+	var req npuPowerModeRequest
+	r.Body = http.MaxBytesReader(w, r.Body, maxRequestBody)
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid JSON body", http.StatusBadRequest)
+		return
+	}
+	if req.Mode == "" {
+		http.Error(w, "mode is required", http.StatusBadRequest)
+		return
+	}
+	if err := s.npuMonitor.SetPowerMode(req.Mode); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]string{"mode": req.Mode})
 }
 
 // HandleLLMStats returns LLM request accounting statistics.

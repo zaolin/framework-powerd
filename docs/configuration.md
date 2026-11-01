@@ -114,6 +114,20 @@ so the daemon has to run as root.
 | `enabled` | bool | `false` | Enable AMD GPU sysfs monitoring. |
 | `poll_interval` | duration | `5s` | Poll interval for GPU/CPU metrics. |
 
+### `npu`
+
+AMD XDNA NPU telemetry through the accel DRM interface; see
+[AMD XDNA NPU Monitoring](npu.md).
+
+| Key | Type | Default | Description |
+|---|---|---|---|
+| `enabled` | bool | `false` | Enable NPU monitoring. |
+| `poll_interval` | duration | `15s` | Query interval, minimum 1s. Each query resumes the device briefly. |
+| `device` | string | `""` | Accel device node. Empty auto-detects `/dev/accel/accel*`. |
+
+The kernel restricts the power-mode ioctl to root, so
+`POST /npu/power-mode` only works when the daemon runs as root.
+
 ### `metrics`
 
 | Key | Type | Default | Description |
@@ -182,6 +196,11 @@ back.
   "gpu": {
     "enabled": true,
     "poll_interval": "5s"
+  },
+  "npu": {
+    "enabled": false,
+    "poll_interval": "15s",
+    "device": ""
   },
   "metrics": {
     "persist": true,

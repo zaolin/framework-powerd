@@ -25,6 +25,7 @@ async def async_setup_entry(
         GamePausedBinarySensor(coordinator),
         SmartdAlertBinarySensor(coordinator),
         StorageHealthBinarySensor(coordinator),
+        NpuPresentBinarySensor(coordinator),
     ]
 
     async_add_entities(entities)
@@ -51,7 +52,7 @@ class RemotePlayBinarySensor(FrameworkEntity, BinarySensorEntity):
 class GameRunningBinarySensor(FrameworkEntity, BinarySensorEntity):
     _attr_name = "Game Running"
     _attr_unique_id = "is_game_running"
-    
+
     @property
     def is_on(self):
         return self.coordinator.data.get("is_game_running", False)
@@ -127,3 +128,19 @@ class StorageHealthBinarySensor(FrameworkEntity, BinarySensorEntity):
             "nvme_last_update": nvme.get("last_update"),
             "nvme_device_count": len(devices),
         }
+
+
+class NpuPresentBinarySensor(FrameworkEntity, BinarySensorEntity):
+    """Presence of an AMD XDNA NPU."""
+
+    _attr_name = "NPU Present"
+    _attr_unique_id = "npu_present"
+    _attr_icon = "mdi:expansion-card"
+
+    @property
+    def available(self):
+        return "npu" in (self.coordinator.data or {})
+
+    @property
+    def is_on(self):
+        return bool((self.coordinator.data.get("npu") or {}).get("present"))

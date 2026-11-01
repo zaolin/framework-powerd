@@ -461,3 +461,108 @@ func TestPricingConfig_Defaults(t *testing.T) {
 		t.Errorf("Expected default currency EUR, got %q", cfg.Currency)
 	}
 }
+
+func TestNPUConfig_Defaults(t *testing.T) {
+	cfg := DefaultConfig().NPU
+	if cfg.Enabled {
+		t.Error("Expected NPU monitoring to be disabled by default")
+	}
+	if cfg.GetPollInterval() != 15*time.Second {
+		t.Errorf("Expected 15s poll interval, got %v", cfg.GetPollInterval())
+	}
+	if cfg.Device != "" {
+		t.Errorf("Expected auto-detection, got %q", cfg.Device)
+	}
+}
+
+func TestNPUConfig_GetPollInterval(t *testing.T) {
+	cases := map[string]time.Duration{
+		"":     15 * time.Second,
+		"soon": 15 * time.Second,
+		"0s":   15 * time.Second,
+		"5s":   5 * time.Second,
+		"1m":   time.Minute,
+	}
+	for raw, want := range cases {
+		cfg := NPUConfig{PollInterval: raw}
+		if got := cfg.GetPollInterval(); got != want {
+			t.Errorf("GetPollInterval(%q) = %v, want %v", raw, got, want)
+		}
+	}
+}
+
+func TestNPUConfig_Validate(t *testing.T) {
+	valid := NPUConfig{Enabled: true, PollInterval: "15s"}
+	if err := valid.Validate(); err != nil {
+		t.Errorf("valid NPU config rejected: %v", err)
+	}
+
+	disabled := NPUConfig{}
+	if err := disabled.Validate(); err != nil {
+		t.Errorf("disabled NPU config rejected: %v", err)
+	}
+
+	badInterval := NPUConfig{Enabled: true, PollInterval: "soon"}
+	if err := badInterval.Validate(); err == nil {
+		t.Error("expected an invalid poll_interval to be rejected")
+	}
+
+	tooFast := NPUConfig{Enabled: true, PollInterval: "100ms"}
+	if err := tooFast.Validate(); err == nil {
+		t.Error("expected a sub-second poll_interval to be rejected")
+	}
+
+	badDevice := NPUConfig{Enabled: true, Device: "/dev/dri/renderD128"}
+	if err := badDevice.Validate(); err == nil {
+		t.Error("expected a device outside /dev/accel to be rejected")
+	}
+
+	goodDevice := NPUConfig{Enabled: true, Device: "/dev/accel/accel1"}
+	if err := goodDevice.Validate(); err != nil {
+		t.Errorf("explicit accel device rejected: %v", err)
+	}
+}
+
+func TestNPUConfig_Parsing(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.json")
+	content := `{
+		"server": {"address": "localhost", "port": 8080},
+		"npu": {"enabled": true, "poll_interval": "30s", "device": "/dev/accel/accel1"}
+	}`
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if !cfg.NPU.Enabled {
+		t.Error("expected npu.enabled to be true")
+	}
+	if got := cfg.NPU.GetPollInterval(); got != 30*time.Second {
+		t.Errorf("poll interval = %v, want 30s", got)
+	}
+	if cfg.NPU.Device != "/dev/accel/accel1" {
+		t.Errorf("device = %q", cfg.NPU.Device)
+	}
+	if err := cfg.NPU.Validate(); err != nil {
+		t.Errorf("valid npu config rejected: %v", err)
+	}
+
+	// A config without the section keeps the disabled default.
+	plain := filepath.Join(t.TempDir(), "plain.json")
+	if err := os.WriteFile(plain, []byte(`{"server": {"port": 8080}}`), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	cfg, err = Load(plain)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.NPU.Enabled {
+		t.Error("expected npu monitoring to stay disabled")
+	}
+	if got := cfg.NPU.GetPollInterval(); got != 15*time.Second {
+		t.Errorf("default poll interval = %v, want 15s", got)
+	}
+}

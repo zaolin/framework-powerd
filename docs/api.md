@@ -41,6 +41,7 @@ curl http://localhost:8080/healthz
     "smartd": true,
     "nvme": "ok",
     "llm": "ok",
+    "npu": "ok",
     "gpu": true
   },
   "metrics_state": {
@@ -56,10 +57,12 @@ curl http://localhost:8080/healthz
   `waiting` (no sample yet).
 - `status` becomes `degraded` when turbostat is stale, still waiting after the
   30-second startup grace period, the last metrics write failed, LLM accounting
-  reports `error`, or any NVMe device is `warning`/`critical`.
+  or NPU monitoring reports `error`, or any NVMe device is `warning`/`critical`.
 - `monitors.nvme` is `disabled`, `ok`, `warning` or `critical`.
 - `monitors.llm` is `disabled`, `ok`, `waiting` or `error`. Only `error`
   degrades the status; `waiting` is normal before the first counted request.
+- `monitors.npu` is `disabled`, `absent`, `waiting`, `ok` or `error`. A missing
+  device (`absent`) does not degrade the status.
 - `last_error` is omitted while persistence is healthy.
 
 ## `GET /status`
@@ -148,7 +151,7 @@ Full daemon state. Requires auth.
     "cpu_model": "AMD Ryzen AI 7 350 w/ Radeon 860M",
     "cpu_count": 16,
     "total_ram_bytes": 50010562560,
-    "daemon_version": "1.6.0"
+    "daemon_version": "1.7.0"
   }
 }
 ```
@@ -161,7 +164,9 @@ Notes:
 - `health` mirrors the `/healthz` payload: overall status, turbostat/NVMe
   monitor state, power sample age and metrics persistence status.
 - `smartd` is added when SMART monitoring is enabled. `gpu` is added when GPU
-  monitoring is enabled.
+  monitoring is enabled. `npu` is added when NPU monitoring is enabled; it
+  always carries `present`, and the telemetry fields are filled only while a
+  device is available.
 - `power.current.estimated_total_watts` includes peripheral estimates and VRM
   correction. `cor_watt` is a subset of `pkg_watt` and is not added again.
 - `memory.used_bytes = total - available`; `free_bytes` is literal `MemFree`.
@@ -300,11 +305,36 @@ curl -H "Authorization: Bearer $TOKEN" http://localhost:8080/nvme/stats
 
 The payload matches the `nvme` block shown in `GET /status`.
 
+## `GET /npu/stats`
+
+Returns the latest AMD XDNA NPU snapshot when NPU monitoring is enabled;
+otherwise `404`. Requires auth.
+
+```bash
+curl -H "Authorization: Bearer $TOKEN" http://localhost:8080/npu/stats
+```
+
+The payload matches the `npu` block shown in `GET /status`. See
+[AMD XDNA NPU Monitoring](npu.md) for every field.
+
+## `POST /npu/power-mode`
+
+Switches the NPU power mode. Requires auth, is rate limited, and needs the
+daemon to run as root because the kernel restricts the ioctl.
+
+```bash
+curl -X POST http://localhost:8080/npu/power-mode \
+  -H "Authorization: Bearer $TOKEN" \
+  -d '{"mode":"high"}'
+```
+
+Accepted values are `default`, `low`, `medium`, `high` and `turbo`.
+
 ## Errors
 
 | Status | Meaning |
 |---|---|
-| `400` | Invalid JSON or unsupported mode. |
+| `400` | Invalid JSON, unsupported mode, or an NPU power-mode change the daemon cannot perform (no device, not root). |
 | `401` | Missing/invalid token, wrong scheme, or `authorized=false`. |
 | `404` | Unknown path or optional monitor disabled. |
 | `405` | Wrong HTTP method. |

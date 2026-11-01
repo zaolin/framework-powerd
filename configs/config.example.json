@@ -28,6 +28,11 @@
     "enabled": true,
     "poll_interval": "5s"
   },
+  "npu": {
+    "enabled": false,
+    "poll_interval": "15s",
+    "device": ""
+  },
   "metrics": {
     "persist": true,
     "state_file": "/var/lib/framework-powerd/metrics.json",
