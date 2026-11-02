@@ -857,3 +857,54 @@ class TestNPUEntityBuilder:
 
         del mock_coordinator.data["npu"]
         assert build_npu_entities(mock_coordinator) == []
+
+
+class TestFanSensors:
+    """Test the EC fan sensors."""
+
+    def test_speed_and_duty(self, mock_coordinator):
+        from custom_components.framework_powerd.sensor import (
+            FanDutySensor,
+            FanSpeedSensor,
+        )
+
+        assert FanSpeedSensor(mock_coordinator).native_value == 1148
+        assert FanDutySensor(mock_coordinator).native_value == 50
+
+    def test_temperatures(self, mock_coordinator):
+        from custom_components.framework_powerd.sensor import (
+            FanBoardTemperatureSensor,
+            FanCPUTemperatureSensor,
+        )
+
+        assert FanBoardTemperatureSensor(mock_coordinator).native_value == 54.0
+        assert FanCPUTemperatureSensor(mock_coordinator).native_value == 68.0
+
+    def test_unavailable_when_disabled(self, mock_coordinator):
+        from custom_components.framework_powerd.sensor import FanSpeedSensor
+
+        mock_coordinator.data["fan"]["enabled"] = False
+        assert FanSpeedSensor(mock_coordinator).available is False
+
+        mock_coordinator.data["fan"]["enabled"] = True
+        mock_coordinator.data["fan"]["supported"] = False
+        assert FanSpeedSensor(mock_coordinator).available is False
+
+    def test_builder(self, mock_coordinator):
+        from custom_components.framework_powerd.sensor import build_fan_entities
+
+        assert sorted(type(e).__name__ for e in build_fan_entities(mock_coordinator)) == [
+            "FanBoardTemperatureSensor",
+            "FanCPUTemperatureSensor",
+            "FanDutySensor",
+            "FanSpeedSensor",
+        ]
+
+        mock_coordinator.data["fan"]["enabled"] = False
+        assert build_fan_entities(mock_coordinator) == []
+
+    def test_unavailable_when_coordinator_failed(self, mock_coordinator):
+        from custom_components.framework_powerd.sensor import FanSpeedSensor
+
+        mock_coordinator.last_update_success = False
+        assert FanSpeedSensor(mock_coordinator).available is False

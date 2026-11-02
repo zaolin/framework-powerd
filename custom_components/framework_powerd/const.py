@@ -14,3 +14,6 @@ DEFAULT_PORT = 8080
 
 # Power modes exposed by the AMD XDNA driver, in driver enum order.
 NPU_POWER_MODES = ["default", "low", "medium", "high", "turbo"]
+
+# Fan control modes: the EC curve or the daemon curve.
+FAN_MODES = ["auto", "curve"]

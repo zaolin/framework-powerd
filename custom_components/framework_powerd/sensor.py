@@ -70,6 +70,9 @@ async def async_setup_entry(
     def _npu_entities(coord):
         return build_npu_entities(coord)
 
+    def _fan_entities(coord):
+        return build_fan_entities(coord)
+
     def _nvme_entities(coord):
         entities = []
         nvme = (coord.data or {}).get("nvme", {})
@@ -135,6 +138,11 @@ async def async_setup_entry(
     if npu_data.get("present"):
         entities.extend(_npu_entities(coordinator))
 
+    # Add fan control sensors when the controller is enabled
+    fan_data = coordinator.data.get("fan", {})
+    if fan_data.get("enabled"):
+        entities.extend(_fan_entities(coordinator))
+
     async_add_entities(entities)
 
     # A11: dynamic factories for blocks that may not exist at setup time
@@ -160,6 +168,9 @@ async def async_setup_entry(
     def _npu_sensors_factory(coord):
         return _npu_entities(coord)
 
+    def _fan_sensors_factory(coord):
+        return _fan_entities(coord)
+
     if not memory_data:
         coordinator.register_entity_factory(_memory_sensors_factory)
     if not gpu_data:
@@ -168,6 +179,8 @@ async def async_setup_entry(
         coordinator.register_entity_factory(_nvme_sensors_factory)
     if not npu_data.get("present"):
         coordinator.register_entity_factory(_npu_sensors_factory)
+    if not fan_data.get("enabled"):
+        coordinator.register_entity_factory(_fan_sensors_factory)
     coordinator.register_entity_factory(_llm_sensors_factory, persistent=True)
 
     # A11: register a dynamic factory so per-device SMART alert entities appear
@@ -1056,6 +1069,104 @@ def build_npu_entities(coord):
         NpuActiveContextsSensor(coord),
         NpuFirmwareSensor(coord),
         NpuPowerStateSensor(coord),
+    ]
+
+
+# Fan Control Sensors
+
+class FanSensorBase(FrameworkEntity, SensorEntity):
+    """Base class for EC fan sensors."""
+
+    @property
+    def _fan(self):
+        return self.coordinator.data.get("fan") or {}
+
+    @property
+    def _sensors(self):
+        return self._fan.get("sensors") or {}
+
+    @property
+    def available(self):
+        return (
+            self.coordinator.last_update_success
+            and bool(self._fan.get("enabled"))
+            and bool(self._fan.get("supported", True))
+        )
+
+
+class FanSpeedSensor(FanSensorBase):
+    """Measured fan speed."""
+
+    _attr_name = "Fan Speed"
+    _attr_unique_id = "fan_speed"
+    _attr_native_unit_of_measurement = "RPM"
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+    _attr_icon = "mdi:fan"
+
+    @property
+    def native_value(self):
+        return self._sensors.get("fan_rpm")
+
+
+class FanDutySensor(FanSensorBase):
+    """Duty currently commanded by the daemon."""
+
+    _attr_name = "Fan Duty"
+    _attr_unique_id = "fan_duty"
+    _attr_native_unit_of_measurement = "%"
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+    _attr_icon = "mdi:fan-auto"
+
+    @property
+    def native_value(self):
+        return self._fan.get("duty_percent")
+
+
+class FanBoardTemperatureSensor(FanSensorBase):
+    """Hottest mainboard sensor reported by the EC."""
+
+    _attr_name = "Mainboard Temperature"
+    _attr_unique_id = "fan_board_temperature"
+    _attr_device_class = SensorDeviceClass.TEMPERATURE
+    _attr_native_unit_of_measurement = "°C"
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_suggested_display_precision = 1
+    _attr_icon = "mdi:thermometer"
+
+    @property
+    def native_value(self):
+        return self._sensors.get("board_celsius")
+
+
+class FanCPUTemperatureSensor(FanSensorBase):
+    """CPU temperature reported by the EC."""
+
+    _attr_name = "CPU Board Temperature"
+    _attr_unique_id = "fan_cpu_temperature"
+    _attr_device_class = SensorDeviceClass.TEMPERATURE
+    _attr_native_unit_of_measurement = "°C"
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_suggested_display_precision = 1
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+    _attr_icon = "mdi:thermometer"
+
+    @property
+    def native_value(self):
+        return self._sensors.get("cpu_ec_celsius")
+
+
+def build_fan_entities(coord):
+    """Return the fan sensors for a coordinator snapshot."""
+    fan = (coord.data or {}).get("fan") or {}
+    if not fan.get("enabled"):
+        return []
+    return [
+        FanSpeedSensor(coord),
+        FanDutySensor(coord),
+        FanBoardTemperatureSensor(coord),
+        FanCPUTemperatureSensor(coord),
     ]
 
 

@@ -15,6 +15,7 @@ A Go daemon to automatically manage power profiles on the **Framework Desktop**,
 - **Steam Remote Play Detection**: Detects virtual input devices from Remote Play (specifically `js` interfaces) to keep the system active.
 - **GPU Monitoring**: Tracks AMD GPU metrics via sysfs (VRAM, GTT, temperature, power) and system CPU usage via `/proc/stat`.
 - **NPU Monitoring**: Reads AMD XDNA telemetry through the accel DRM interface: NPU power, per-column AIE utilization, clocks, TOPs, hardware contexts with owning PIDs, firmware, and a switchable power mode.
+- **EC Fan Control**: Drives the Framework EC fan with a temperature curve: a steady 50 % baseline, a ramp from 75 to 90 °C, hysteresis and a systemd fallback that hands the fan back to the EC when the daemon stops.
 - **SMART Health Monitoring**: Monitors smartd journald logs, keeps sticky persisted alerts, and classifies health, wear and sector failures.
 - **NVMe Health Polling**: Directly polls `nvme smart-log`/`smartctl` for wear, available spare, media errors, error-log growth and temperature, with configurable warning/critical thresholds.
 - **Storage Notifications**: Home Assistant persistent notifications and optional `notify_service` calls for new SMART/NVMe warnings.
@@ -38,6 +39,7 @@ A Go daemon to automatically manage power profiles on the **Framework Desktop**,
 - [Security](docs/security.md) — JWT, network exposure, systemd hardening
 - [LLM request accounting](docs/llm.md) — Caddy setup, IP groups, per-day shares
 - [AMD XDNA NPU monitoring](docs/npu.md) — accel telemetry, contexts, power mode
+- [EC fan control](docs/fan.md) — curve, safety, calibration
 - [Migration to 1.3](docs/migration-1.3.md) — Ollama removal and entity changes
 - [Idle detection](docs/idle_logic.md) — detailed idle-state logic
 - [Changelog](CHANGELOG.md)
@@ -332,6 +334,9 @@ This project is compatible with [HACS](https://hacs.xyz/) (Home Assistant Commun
     *   NPU Present, power, column utilization, MP-NPU and H clocks, TOPs, active contexts
     *   Firmware and power state as diagnostics
     *   NPU Power Mode select entity (default/low/medium/high/turbo)
+*   **Fan** (if enabled):
+    *   Fan speed, commanded duty, mainboard and CPU board temperatures
+    *   Fan Mode select entity (EC auto / daemon curve)
 *   **System Information** (diagnostic): Kernel, OS, CPU model, total RAM, daemon version
 
 ### API Control
@@ -439,6 +444,18 @@ The daemon supports a JSON configuration file. The full reference is in [Configu
     "poll_interval": "15s",
     "device": ""
   },
+  "fan": {
+    "enabled": false,
+    "mode": "curve",
+    "min_duty_percent": 50,
+    "start_temp_c": 75,
+    "full_temp_c": 90,
+    "critical_temp_c": 90,
+    "board_critical_temp_c": 85,
+    "hysteresis_c": 3,
+    "fall_step_percent": 3,
+    "poll_interval": "5s"
+  },
   "metrics": {
     "persist": true,
     "state_file": "/var/lib/framework-powerd/metrics.json",
@@ -486,6 +503,16 @@ The daemon supports a JSON configuration file. The full reference is in [Configu
 | `npu.enabled` | Enabled | bool | `false` | Enable AMD XDNA NPU monitoring |
 | `npu.poll_interval` | Poll Interval | duration | `15s` | NPU query interval (wakes the device) |
 | `npu.device` | Device | string | `""` | Accel device node; empty auto-detects |
+| `fan.enabled` | Enabled | bool | `false` | Enable EC fan control |
+| `fan.mode` | Mode | string | `curve` | `auto` (EC curve) or `curve` |
+| `fan.min_duty_percent` | Min Duty | int | `50` | Duty floor below the ramp; 0 or unset means 50 |
+| `fan.start_temp_c` | Start Temp | int | `75` | Ramp start temperature |
+| `fan.full_temp_c` | Full Temp | int | `90` | Temperature reaching 100 % duty |
+| `fan.critical_temp_c` | Critical Temp | int | `90` | Force 100 % above this |
+| `fan.board_critical_temp_c` | Board Critical | int | `85` | Force 100 % above this mainboard temperature |
+| `fan.hysteresis_c` | Hysteresis | int | `3` | Band before falling |
+| `fan.fall_step_percent` | Fall Step | int | `3` | Maximum decrease per update |
+| `fan.poll_interval` | Poll Interval | duration | `5s` | Control interval |
 | `metrics.persist` | Persist | bool | `true` | Persist energy aggregates across restarts |
 | `metrics.state_file` | State File | string | `/var/lib/framework-powerd/metrics.json` | Atomic JSON state path |
 | `metrics.save_interval` | Save Interval | duration | `5m` | Periodic flush interval |

@@ -263,6 +263,22 @@ def mock_coordinator():
             ],
             "last_update": "2026-01-01T00:00:00Z",
         },
+        "fan": {
+            "enabled": True,
+            "supported": True,
+            "mode": "curve",
+            "duty_percent": 50,
+            "sensors": {
+                "cpu_celsius": 72.0,
+                "cpu_ec_celsius": 68.0,
+                "board_celsius": 54.0,
+                "gpu_celsius": 70.0,
+                "nvme_celsius": 47.0,
+                "fan_rpm": 1148,
+                "max_celsius": 72.0,
+            },
+            "last_update": "2026-01-01T00:00:00Z",
+        },
     }
     return coord
 

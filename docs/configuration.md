@@ -128,6 +128,26 @@ AMD XDNA NPU telemetry through the accel DRM interface; see
 The kernel restricts the power-mode ioctl to root, so
 `POST /npu/power-mode` only works when the daemon runs as root.
 
+### `fan`
+
+EC fan control; see [EC Fan Control](fan.md).
+
+| Key | Type | Default | Description |
+|---|---|---|---|
+| `enabled` | bool | `false` | Enable fan control. |
+| `mode` | string | `curve` | `auto` keeps the EC curve, `curve` runs the daemon curve. |
+| `min_duty_percent` | int | `50` | Duty floor below `start_temp_c`. 0 or unset means 50. |
+| `start_temp_c` | int | `75` | Temperature where the ramp starts. |
+| `full_temp_c` | int | `90` | Temperature that reaches 100 % duty. |
+| `critical_temp_c` | int | `90` | Hottest sensor that forces 100 %. |
+| `board_critical_temp_c` | int | `85` | Mainboard sensor that forces 100 %. |
+| `hysteresis_c` | int | `3` | Band to clear before the fan falls. |
+| `fall_step_percent` | int | `3` | Maximum decrease per update. |
+| `poll_interval` | duration | `5s` | Sensor and control interval, minimum 1 s. |
+
+The shipped systemd unit returns the fan to the EC with `ExecStopPost` on stop,
+crash and watchdog kill.
+
 ### `metrics`
 
 | Key | Type | Default | Description |
@@ -201,6 +221,18 @@ back.
     "enabled": false,
     "poll_interval": "15s",
     "device": ""
+  },
+  "fan": {
+    "enabled": false,
+    "mode": "curve",
+    "min_duty_percent": 50,
+    "start_temp_c": 75,
+    "full_temp_c": 90,
+    "critical_temp_c": 90,
+    "board_critical_temp_c": 85,
+    "hysteresis_c": 3,
+    "fall_step_percent": 3,
+    "poll_interval": "5s"
   },
   "metrics": {
     "persist": true,

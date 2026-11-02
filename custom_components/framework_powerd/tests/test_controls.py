@@ -132,3 +132,50 @@ class TestNpuPowerModeSelect:
         entity = FrameworkPowerNpuPowerModeSelect(mock_coordinator)
         asyncio.run(entity.async_select_option("high"))
         mock_coordinator.async_set_npu_power_mode.assert_awaited_once_with("high")
+
+
+class TestFanModeSelect:
+    """Test the fan mode select entity."""
+
+    def test_options_and_current(self, mock_coordinator):
+        from custom_components.framework_powerd.select import (
+            FrameworkPowerFanModeSelect,
+        )
+
+        entity = FrameworkPowerFanModeSelect(mock_coordinator)
+        assert entity.options == ["auto", "curve"]
+        assert entity.current_option == "curve"
+        assert entity._attr_unique_id == "fan_mode_select"
+        assert entity.available is True
+
+    def test_unavailable_when_disabled(self, mock_coordinator):
+        from custom_components.framework_powerd.select import (
+            FrameworkPowerFanModeSelect,
+        )
+
+        mock_coordinator.data["fan"]["enabled"] = False
+        entity = FrameworkPowerFanModeSelect(mock_coordinator)
+        assert entity.available is False
+
+        mock_coordinator.data["fan"]["enabled"] = True
+        mock_coordinator.data["fan"]["supported"] = False
+        entity = FrameworkPowerFanModeSelect(mock_coordinator)
+        assert entity.available is False
+
+    def test_select_option_calls_coordinator(self, mock_coordinator):
+        from custom_components.framework_powerd.select import (
+            FrameworkPowerFanModeSelect,
+        )
+
+        mock_coordinator.async_set_fan_mode = AsyncMock()
+        entity = FrameworkPowerFanModeSelect(mock_coordinator)
+        asyncio.run(entity.async_select_option("auto"))
+        mock_coordinator.async_set_fan_mode.assert_awaited_once_with("auto")
+
+    def test_unavailable_when_coordinator_failed(self, mock_coordinator):
+        from custom_components.framework_powerd.select import (
+            FrameworkPowerFanModeSelect,
+        )
+
+        mock_coordinator.last_update_success = False
+        assert FrameworkPowerFanModeSelect(mock_coordinator).available is False

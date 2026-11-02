@@ -4,7 +4,7 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
-from .const import DOMAIN, NPU_POWER_MODES
+from .const import DOMAIN, FAN_MODES, NPU_POWER_MODES
 from .entity import FrameworkEntity
 
 TUNABLE_MODES = ["performance", "powersave"]
@@ -21,6 +21,7 @@ async def async_setup_entry(
         [
             FrameworkPowerTunableModeSelect(coordinator),
             FrameworkPowerNpuPowerModeSelect(coordinator),
+            FrameworkPowerFanModeSelect(coordinator),
         ]
     )
 
@@ -69,3 +70,32 @@ class FrameworkPowerNpuPowerModeSelect(FrameworkEntity, SelectEntity):
 
     async def async_select_option(self, option: str) -> None:
         await self.coordinator.async_set_npu_power_mode(option)
+
+
+class FrameworkPowerFanModeSelect(FrameworkEntity, SelectEntity):
+    """Select between the EC fan curve and the daemon curve."""
+
+    _attr_name = "Fan Mode"
+    _attr_unique_id = "fan_mode_select"
+    _attr_options = FAN_MODES
+    _attr_icon = "mdi:fan"
+
+    @property
+    def _fan(self):
+        return (self.coordinator.data or {}).get("fan") or {}
+
+    @property
+    def available(self):
+        return (
+            self.coordinator.last_update_success
+            and bool(self._fan.get("enabled"))
+            and bool(self._fan.get("supported", True))
+        )
+
+    @property
+    def current_option(self):
+        mode = self._fan.get("mode")
+        return mode if mode in self._attr_options else None
+
+    async def async_select_option(self, option: str) -> None:
+        await self.coordinator.async_set_fan_mode(option)

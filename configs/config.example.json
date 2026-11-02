@@ -33,6 +33,18 @@
     "poll_interval": "15s",
     "device": ""
   },
+  "fan": {
+    "enabled": false,
+    "mode": "curve",
+    "min_duty_percent": 50,
+    "start_temp_c": 75,
+    "full_temp_c": 90,
+    "critical_temp_c": 90,
+    "board_critical_temp_c": 85,
+    "hysteresis_c": 3,
+    "fall_step_percent": 3,
+    "poll_interval": "5s"
+  },
   "metrics": {
     "persist": true,
     "state_file": "/var/lib/framework-powerd/metrics.json",

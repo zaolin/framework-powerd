@@ -17,7 +17,7 @@ from homeassistant.helpers.update_coordinator import (
     UpdateFailed,
 )
 
-from .const import DOMAIN, CONF_NOTIFY_SERVICE, NPU_POWER_MODES
+from .const import DOMAIN, CONF_NOTIFY_SERVICE, FAN_MODES, NPU_POWER_MODES
 
 SERVICE_SET_MODE = "set_mode"
 SERVICE_RESET_IDLE = "reset_idle"
@@ -238,6 +238,13 @@ class FrameworkPowerCoordinator(DataUpdateCoordinator):
         if mode not in NPU_POWER_MODES:
             raise HomeAssistantError(f"Unsupported NPU power mode: {mode}")
         await self._async_post("/npu/power-mode", {"mode": mode})
+        await self.async_request_refresh()
+
+    async def async_set_fan_mode(self, mode: str) -> None:
+        """Switch the EC fan between automatic control and the daemon curve."""
+        if mode not in FAN_MODES:
+            raise HomeAssistantError(f"Unsupported fan mode: {mode}")
+        await self._async_post("/fan/mode", {"mode": mode})
         await self.async_request_refresh()
 
     async def async_reset_idle(self) -> None:

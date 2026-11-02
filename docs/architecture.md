@@ -52,6 +52,7 @@ flowchart TD
         Mem["memory collector"]
         LLM["LLM access-log tailer"]
         NPU["NPU accel monitor"]
+        Fan["EC fan controller"]
     end
 
     Turbo --> PowerMon["Power monitor"]
@@ -67,6 +68,8 @@ flowchart TD
     LLM --> Status
     AccelDev[("/dev/accel/accel0")] --> NPU
     NPU --> Status
+    Fan -->|"fansetduty / autofanctrl"| EC["Embedded controller"]
+    Fan --> Status
     API --> Status
     Status --> HA["Home Assistant integration"]
     HA -->|"select / button / services"| API
@@ -77,8 +80,9 @@ callbacks take a mutex, so idle, remote-play, Steam and API events cannot
 interleave mode changes or pause/resume operations.
 
 The API exposes `/status` (including a `health` block and `tunable_mode`),
-`/healthz`, `/mode`, `/activity`, `/smartd/stats`, `/nvme/stats`, `/llm/stats`
-and `/npu/stats`, plus `POST /npu/power-mode`. The Home
+`/healthz`, `/mode`, `/activity`, `/smartd/stats`, `/nvme/stats`, `/llm/stats`,
+`/npu/stats` and `/fan/stats`, plus `POST /npu/power-mode` and
+`POST /fan/mode`. The Home
 Assistant integration polls `/status`, creates notifications from SMART/NVMe
 warnings, and can call `/mode` and `/activity` through its select entity,
 button and services.
@@ -151,15 +155,22 @@ Startup order:
    persistence loops.
 5. Start optional SMART, NVMe, LLM, NPU and GPU monitors. The NPU monitor keeps
    watching for the device if it is not present yet.
-6. Bind the HTTP listener, send systemd `READY=1`, start watchdog pings.
+6. Bind the HTTP listener, then start the fan controller, send systemd
+   `READY=1` and start watchdog pings. The fan starts only after a successful
+   bind, because a failed bind exits via `log.Fatalf` and would otherwise leave
+   a manual duty behind.
 
 Shutdown order:
 
 1. Receive `SIGTERM`/`SIGINT`, send systemd `STOPPING=1`.
-2. Stop the power monitor and flush the final metrics snapshot.
-3. Stop the SMART monitor and flush persisted alerts.
-4. Close the HTTP server with a 5-second grace period.
-5. Resume any paused game process tree before exiting.
+2. Stop the fan controller and return the fan to the EC.
+3. Stop the power monitor and flush the final metrics snapshot.
+4. Stop the SMART monitor and flush persisted alerts.
+5. Close the HTTP server with a 5-second grace period.
+6. Resume any paused game process tree before exiting.
+
+The systemd unit also runs `framework_tool --autofanctrl` as `ExecStopPost`, so
+a crash or watchdog kill returns the fan even when this order cannot run.
 
 ## Security boundary
 

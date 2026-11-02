@@ -566,3 +566,162 @@ func TestNPUConfig_Parsing(t *testing.T) {
 		t.Errorf("default poll interval = %v, want 15s", got)
 	}
 }
+
+func TestFanConfig_Defaults(t *testing.T) {
+	cfg := DefaultConfig().Fan
+	if cfg.Enabled {
+		t.Error("expected fan control to be disabled by default")
+	}
+	if cfg.Mode != "curve" {
+		t.Errorf("mode = %q, want curve", cfg.Mode)
+	}
+	if got := cfg.GetMinDutyPercent(); got != 50 {
+		t.Errorf("min duty = %d, want 50", got)
+	}
+	if got := cfg.GetStartTempC(); got != 75 {
+		t.Errorf("start temp = %d, want 75", got)
+	}
+	if got := cfg.GetFullTempC(); got != 90 {
+		t.Errorf("full temp = %d, want 90", got)
+	}
+	if got := cfg.GetCriticalTempC(); got != 90 {
+		t.Errorf("critical temp = %d, want 90", got)
+	}
+	if got := cfg.GetBoardCriticalTempC(); got != 85 {
+		t.Errorf("board critical temp = %d, want 85", got)
+	}
+	if got := cfg.GetHysteresisC(); got != 3 {
+		t.Errorf("hysteresis = %d, want 3", got)
+	}
+	if got := cfg.GetFallStepPercent(); got != 3 {
+		t.Errorf("fall step = %d, want 3", got)
+	}
+	if got := cfg.GetPollInterval(); got != 5*time.Second {
+		t.Errorf("poll interval = %v, want 5s", got)
+	}
+}
+
+func TestFanConfig_Getters(t *testing.T) {
+	cfg := FanConfig{}
+	cases := []struct {
+		name string
+		got  int
+		want int
+	}{
+		{"min", cfg.GetMinDutyPercent(), 50},
+		{"start", cfg.GetStartTempC(), 75},
+		{"full", cfg.GetFullTempC(), 90},
+		{"critical", cfg.GetCriticalTempC(), 90},
+		{"board critical", cfg.GetBoardCriticalTempC(), 85},
+		{"hysteresis", cfg.GetHysteresisC(), 3},
+		{"fall", cfg.GetFallStepPercent(), 3},
+	}
+	for _, tc := range cases {
+		if tc.got != tc.want {
+			t.Errorf("%s = %d, want %d", tc.name, tc.got, tc.want)
+		}
+	}
+}
+
+func TestFanConfig_Validate(t *testing.T) {
+	valid := DefaultConfig().Fan
+	valid.Enabled = true
+	if err := valid.Validate(); err != nil {
+		t.Errorf("valid fan config rejected: %v", err)
+	}
+
+	disabled := FanConfig{}
+	if err := disabled.Validate(); err != nil {
+		t.Errorf("disabled fan config rejected: %v", err)
+	}
+
+	badMode := valid
+	badMode.Mode = "turbo"
+	if err := badMode.Validate(); err == nil {
+		t.Error("expected an unknown mode to be rejected")
+	}
+
+	badDuty := valid
+	badDuty.MinDutyPercent = 120
+	if err := badDuty.Validate(); err == nil {
+		t.Error("expected an out-of-range min duty to be rejected")
+	}
+
+	badRamp := valid
+	badRamp.StartTempC = 90
+	badRamp.FullTempC = 80
+	if err := badRamp.Validate(); err == nil {
+		t.Error("expected full <= start to be rejected")
+	}
+
+	badCritical := valid
+	badCritical.CriticalTempC = 80
+	if err := badCritical.Validate(); err == nil {
+		t.Error("expected critical below full to be rejected")
+	}
+
+	badBoard := valid
+	badBoard.BoardCriticalTempC = 200
+	if err := badBoard.Validate(); err == nil {
+		t.Error("expected an out-of-range board threshold to be rejected")
+	}
+
+	badHyst := valid
+	badHyst.HysteresisC = 50
+	if err := badHyst.Validate(); err == nil {
+		t.Error("expected an out-of-range hysteresis to be rejected")
+	}
+
+	badFall := valid
+	badFall.FallStepPercent = 200
+	if err := badFall.Validate(); err == nil {
+		t.Error("expected an out-of-range fall step to be rejected")
+	}
+
+	badInterval := valid
+	badInterval.PollInterval = "soon"
+	if err := badInterval.Validate(); err == nil {
+		t.Error("expected an invalid poll interval to be rejected")
+	}
+}
+
+func TestFanConfig_Parsing(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.json")
+	content := `{
+		"server": {"port": 8080},
+		"fan": {"enabled": true, "mode": "auto", "min_duty_percent": 40, "poll_interval": "10s"}
+	}`
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if !cfg.Fan.Enabled || cfg.Fan.Mode != "auto" {
+		t.Errorf("fan = %+v", cfg.Fan)
+	}
+	if got := cfg.Fan.GetMinDutyPercent(); got != 40 {
+		t.Errorf("min duty = %d, want 40", got)
+	}
+	if got := cfg.Fan.GetPollInterval(); got != 10*time.Second {
+		t.Errorf("poll interval = %v, want 10s", got)
+	}
+
+	// Unset values keep the defaults.
+	plain := filepath.Join(t.TempDir(), "plain.json")
+	if err := os.WriteFile(plain, []byte(`{"server": {"port": 8080}}`), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	cfg, err = Load(plain)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.Fan.Enabled {
+		t.Error("expected fan control to stay disabled")
+	}
+	if cfg.Fan.Mode != "curve" {
+		t.Errorf("mode = %q, want the curve default", cfg.Fan.Mode)
+	}
+}

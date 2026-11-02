@@ -167,6 +167,24 @@ sensor. The daily history is exposed as the
 `history` attribute of the total and today sensors, so it can be graphed
 without extra entities. See [LLM Request Accounting](llm.md).
 
+### Fan
+
+Present when `fan.enabled` is true. See [EC Fan Control](fan.md).
+
+| Entity | Unit | Source |
+|---|---|---|
+| Fan Speed | RPM | `fan.sensors.fan_rpm` |
+| Fan Duty | % | `fan.duty_percent` |
+| Mainboard Temperature | °C | `fan.sensors.board_celsius` |
+| CPU Board Temperature | °C | `fan.sensors.cpu_ec_celsius` |
+| Fan Mode | select | `fan.mode` (`auto`, `curve`) |
+
+The fan entities are unavailable while the daemon reports the controller as
+unsupported, for example when `framework_tool` is missing.
+
+`Fan Mode` switches between the EC's own curve and the daemon curve. Setting it
+to `auto` returns control to the EC immediately.
+
 ### Storage health
 
 | Entity | Type | Meaning |
@@ -254,6 +272,10 @@ entities:
   - sensor.npu_column_utilization
   - sensor.npu_tops
   - select.framework_power_daemon_npu_power_mode
+  - sensor.fan_speed
+  - sensor.fan_duty
+  - sensor.mainboard_temperature
+  - select.framework_power_daemon_fan_mode
   - select.framework_power_daemon_power_tunable_mode
   - button.framework_power_daemon_reset_idle_timer
   - binary_sensor.storage_health
@@ -276,6 +298,8 @@ Entity IDs depend on your naming; check Developer Tools → States after setup.
   when the fields appear in `/status`.
 - NPU entities missing: the daemon only creates them when `npu.enabled` is true
   and an `amdxdna` device was found. Check `monitors.npu` in `/healthz`.
+- Fan entities missing: they require `fan.enabled` and a working
+  `framework_tool`. Check `monitors.fan` in `/healthz`.
 - GTT totals are large: GTT is shared system memory, not dedicated VRAM.
 
 See [Troubleshooting](troubleshooting.md) for daemon-side issues.

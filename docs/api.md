@@ -42,6 +42,7 @@ curl http://localhost:8080/healthz
     "nvme": "ok",
     "llm": "ok",
     "npu": "ok",
+    "fan": "curve",
     "gpu": true
   },
   "metrics_state": {
@@ -56,13 +57,17 @@ curl http://localhost:8080/healthz
 - `monitors.turbostat` is `ok`, `stale` (no sample for more than 15 s) or
   `waiting` (no sample yet).
 - `status` becomes `degraded` when turbostat is stale, still waiting after the
-  30-second startup grace period, the last metrics write failed, LLM accounting
-  or NPU monitoring reports `error`, or any NVMe device is `warning`/`critical`.
+  30-second startup grace period, the last metrics write failed, LLM accounting,
+  NPU monitoring or fan control reports `error`, or any NVMe device is
+  `warning`/`critical`.
 - `monitors.nvme` is `disabled`, `ok`, `warning` or `critical`.
 - `monitors.llm` is `disabled`, `ok`, `waiting` or `error`. Only `error`
   degrades the status; `waiting` is normal before the first counted request.
 - `monitors.npu` is `disabled`, `absent`, `waiting`, `ok` or `error`. A missing
   device (`absent`) does not degrade the status.
+- `monitors.fan` is `disabled`, `unsupported`, `waiting`, `auto`, `curve` or
+  `error`. Missing `framework_tool` reports `unsupported` and does not degrade
+  the status.
 - `last_error` is omitted while persistence is healthy.
 
 ## `GET /status`
@@ -151,7 +156,7 @@ Full daemon state. Requires auth.
     "cpu_model": "AMD Ryzen AI 7 350 w/ Radeon 860M",
     "cpu_count": 16,
     "total_ram_bytes": 50010562560,
-    "daemon_version": "1.7.0"
+    "daemon_version": "1.8.0"
   }
 }
 ```
@@ -166,7 +171,8 @@ Notes:
 - `smartd` is added when SMART monitoring is enabled. `gpu` is added when GPU
   monitoring is enabled. `npu` is added when NPU monitoring is enabled; it
   always carries `present`, and the telemetry fields are filled only while a
-  device is available.
+  device is available. `fan` is added when fan control is enabled; it carries
+  the mode, the commanded duty, the sensor set and the current RPM.
 - `power.current.estimated_total_watts` includes peripheral estimates and VRM
   correction. `cor_watt` is a subset of `pkg_watt` and is not added again.
 - `memory.used_bytes = total - available`; `free_bytes` is literal `MemFree`.
@@ -330,11 +336,37 @@ curl -X POST http://localhost:8080/npu/power-mode \
 
 Accepted values are `default`, `low`, `medium`, `high` and `turbo`.
 
+## `GET /fan/stats`
+
+Returns the fan controller snapshot when fan control is enabled; otherwise
+`404`. Requires auth.
+
+```bash
+curl -H "Authorization: Bearer $TOKEN" http://localhost:8080/fan/stats
+```
+
+The payload matches the `fan` block shown in `GET /status`. See
+[EC Fan Control](fan.md) for the fields and the curve.
+
+## `POST /fan/mode`
+
+Switches between the EC curve and the daemon curve. Requires auth and is rate
+limited.
+
+```bash
+curl -X POST http://localhost:8080/fan/mode \
+  -H "Authorization: Bearer $TOKEN" \
+  -d '{"mode":"curve"}'
+```
+
+Accepted values are `auto` and `curve`. Setting `auto` calls
+`framework_tool --autofanctrl` before returning.
+
 ## Errors
 
 | Status | Meaning |
 |---|---|
-| `400` | Invalid JSON, unsupported mode, or an NPU power-mode change the daemon cannot perform (no device, not root). |
+| `400` | Invalid JSON, an unsupported mode, an NPU power-mode change the daemon cannot perform (no device, not root), or a fan mode change it cannot perform (unsupported, unknown). A disabled fan monitor returns `404`. |
 | `401` | Missing/invalid token, wrong scheme, or `authorized=false`. |
 | `404` | Unknown path or optional monitor disabled. |
 | `405` | Wrong HTTP method. |

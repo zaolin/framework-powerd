@@ -237,3 +237,13 @@ sysfs entry could not be read.
 Zero power and utilization are normal while nothing runs on the NPU: models
 served through ROCm use the iGPU, not the NPU. See
 [AMD XDNA NPU Monitoring](npu.md).
+
+## Fan speed does not change
+
+`monitors.fan` in `/healthz` shows the controller state. `unsupported` means
+`framework_tool` is missing or not in the unit's `PATH`, or the daemon is not
+running as root. `error` means either the sensors could not be read or a duty
+change was rejected; after two read failures the daemon tries to return the fan
+to the EC, but a failed `--autofanctrl` is retried on the next poll. To reset
+manual control by hand, run `framework_tool --autofanctrl`. See
+[EC Fan Control](fan.md).

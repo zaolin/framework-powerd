@@ -31,6 +31,7 @@ type Config struct {
 	NVMe        NVMeConfig        `json:"nvme"`
 	GPU         GPUConfig         `json:"gpu"`
 	NPU         NPUConfig         `json:"npu"`
+	Fan         FanConfig         `json:"fan"`
 	Peripherals PeripheralsConfig `json:"peripherals"`
 	Metrics     MetricsConfig     `json:"metrics"`
 	LLM         LLMConfig         `json:"llm"`
@@ -200,6 +201,138 @@ func (n *NPUConfig) Validate() error {
 	}
 	if n.Device != "" && !strings.HasPrefix(n.Device, "/dev/accel/") {
 		return fmt.Errorf("npu.device %q must point into /dev/accel", n.Device)
+	}
+	return nil
+}
+
+// FanConfig controls the EC fan curve.
+type FanConfig struct {
+	Enabled bool `json:"enabled"`
+	// Mode is "auto" (EC curve) or "curve" (the daemon's own curve).
+	Mode string `json:"mode"`
+
+	MinDutyPercent     int `json:"min_duty_percent"`
+	StartTempC         int `json:"start_temp_c"`
+	FullTempC          int `json:"full_temp_c"`
+	CriticalTempC      int `json:"critical_temp_c"`
+	BoardCriticalTempC int `json:"board_critical_temp_c"`
+	HysteresisC        int `json:"hysteresis_c"`
+	FallStepPercent    int `json:"fall_step_percent"`
+
+	PollInterval string `json:"poll_interval"`
+}
+
+// GetMode returns the configured fan mode, defaulting to the curve.
+func (f *FanConfig) GetMode() string {
+	if f.Mode == "" {
+		return "curve"
+	}
+	return f.Mode
+}
+
+// GetPollInterval parses the fan poll interval.
+func (f *FanConfig) GetPollInterval() time.Duration {
+	d, err := time.ParseDuration(f.PollInterval)
+	if err != nil || d < time.Second {
+		return 5 * time.Second
+	}
+	return d
+}
+
+// GetMinDutyPercent returns the duty floor, defaulting to 50.
+func (f *FanConfig) GetMinDutyPercent() int {
+	if f.MinDutyPercent <= 0 || f.MinDutyPercent > 100 {
+		return 50
+	}
+	return f.MinDutyPercent
+}
+
+// GetStartTempC returns the temperature where the ramp starts.
+func (f *FanConfig) GetStartTempC() int {
+	if f.StartTempC <= 0 {
+		return 75
+	}
+	return f.StartTempC
+}
+
+// GetFullTempC returns the temperature that reaches 100 percent duty.
+func (f *FanConfig) GetFullTempC() int {
+	if f.FullTempC <= 0 {
+		return 90
+	}
+	return f.FullTempC
+}
+
+// GetCriticalTempC returns the temperature that forces 100 percent duty.
+func (f *FanConfig) GetCriticalTempC() int {
+	if f.CriticalTempC <= 0 {
+		return 90
+	}
+	return f.CriticalTempC
+}
+
+// GetBoardCriticalTempC returns the mainboard temperature that forces 100 percent.
+func (f *FanConfig) GetBoardCriticalTempC() int {
+	if f.BoardCriticalTempC <= 0 {
+		return 85
+	}
+	return f.BoardCriticalTempC
+}
+
+// GetHysteresisC returns the temperature hysteresis.
+func (f *FanConfig) GetHysteresisC() int {
+	if f.HysteresisC <= 0 {
+		return 3
+	}
+	return f.HysteresisC
+}
+
+// GetFallStepPercent returns the per-update decrease.
+func (f *FanConfig) GetFallStepPercent() int {
+	if f.FallStepPercent <= 0 || f.FallStepPercent > 100 {
+		return 3
+	}
+	return f.FallStepPercent
+}
+
+// Validate checks the fan settings.
+func (f *FanConfig) Validate() error {
+	if !f.Enabled {
+		return nil
+	}
+	switch f.Mode {
+	case "", "auto", "curve":
+	default:
+		return fmt.Errorf("fan.mode must be auto or curve, got %q", f.Mode)
+	}
+	if f.MinDutyPercent < 0 || f.MinDutyPercent > 100 {
+		return fmt.Errorf("fan.min_duty_percent must be within 0..100, got %d", f.MinDutyPercent)
+	}
+	start := f.GetStartTempC()
+	full := f.GetFullTempC()
+	if full <= start {
+		return fmt.Errorf("fan.full_temp_c (%d) must be greater than fan.start_temp_c (%d)", full, start)
+	}
+	if f.CriticalTempC != 0 && f.CriticalTempC < full {
+		return fmt.Errorf("fan.critical_temp_c (%d) must not be below fan.full_temp_c (%d)", f.CriticalTempC, full)
+	}
+	if f.BoardCriticalTempC < 0 || f.BoardCriticalTempC > 125 {
+		return fmt.Errorf("fan.board_critical_temp_c must be within 0..125, got %d", f.BoardCriticalTempC)
+	}
+	if f.HysteresisC < 0 || f.HysteresisC > 30 {
+		return fmt.Errorf("fan.hysteresis_c must be within 0..30, got %d", f.HysteresisC)
+	}
+	if f.FallStepPercent < 0 || f.FallStepPercent > 100 {
+		return fmt.Errorf("fan.fall_step_percent must be within 0..100, got %d", f.FallStepPercent)
+	}
+	if f.PollInterval != "" {
+		d, err := time.ParseDuration(f.PollInterval)
+		if err != nil {
+			return fmt.Errorf("fan.poll_interval %q is not a valid duration: %w", f.PollInterval, err)
+		}
+		if d < time.Second {
+			return fmt.Errorf("fan.poll_interval must be at least 1s, got %q", f.PollInterval)
+		}
 	}
 	return nil
 }
@@ -391,6 +524,18 @@ func DefaultConfig() *Config {
 		NPU: NPUConfig{
 			Enabled:      false,
 			PollInterval: "15s",
+		},
+		Fan: FanConfig{
+			Enabled:            false,
+			Mode:               "curve",
+			MinDutyPercent:     50,
+			StartTempC:         75,
+			FullTempC:          90,
+			CriticalTempC:      90,
+			BoardCriticalTempC: 85,
+			HysteresisC:        3,
+			FallStepPercent:    3,
+			PollInterval:       "5s",
 		},
 		Metrics: MetricsConfig{
 			Persist:      true,

@@ -8,6 +8,12 @@ StartLimitBurst=5
 [Service]
 Type=notify
 ExecStart=/usr/local/bin/framework-powerd serve
+# Hand the fan back to the EC whenever the daemon stops, crashes, is killed by
+# the watchdog, or hits the start limit. The leading "-" ignores failures so a
+# missing tool can never block shutdown. These run even when fan control is
+# disabled in the daemon config; remove them if another service owns the fan.
+ExecStopPost=-/usr/bin/env framework_tool --autofanctrl
+ExecStopPost=-/usr/bin/env framework_tool --driver cros-ec --autofanctrl
 Restart=always
 RestartSec=5s
 WatchdogSec=30s

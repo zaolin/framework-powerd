@@ -309,3 +309,82 @@ class TestNpuPowerModeRequest:
         else:
             raise AssertionError("expected HomeAssistantError for an unknown mode")
         coordinator.async_request_refresh.assert_not_awaited()
+
+
+class TestFanModeRequest:
+    """Test the coordinator call behind the fan mode select."""
+
+    @staticmethod
+    def _coordinator():
+        from unittest.mock import patch
+
+        from custom_components.framework_powerd import FrameworkPowerCoordinator
+
+        with patch("homeassistant.helpers.frame.report_usage"):
+            coordinator = FrameworkPowerCoordinator(
+                MagicMock(), "localhost", 8080, "test-token", "notify.mobile_phone"
+            )
+        return coordinator
+
+    def test_posts_mode_to_the_daemon(self):
+        import asyncio
+        from unittest.mock import patch
+
+        coordinator = self._coordinator()
+        coordinator.async_request_refresh = AsyncMock()
+        captured = {}
+
+        class FakeResponse:
+            status = 200
+
+            async def json(self):
+                return {"mode": "curve"}
+
+            async def text(self):
+                return ""
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *args):
+                return False
+
+        class FakeSession:
+            def __init__(self, *args, **kwargs):
+                pass
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *args):
+                return False
+
+            def post(self, url, headers=None, json=None):
+                captured["url"] = url
+                captured["headers"] = headers
+                captured["json"] = json
+                return FakeResponse()
+
+        with patch("aiohttp.ClientSession", FakeSession):
+            asyncio.run(coordinator.async_set_fan_mode("curve"))
+
+        assert captured["url"] == "http://localhost:8080/fan/mode"
+        assert captured["json"] == {"mode": "curve"}
+        assert captured["headers"]["Authorization"] == "Bearer test-token"
+        coordinator.async_request_refresh.assert_awaited_once()
+
+    def test_rejects_unknown_mode(self):
+        import asyncio
+
+        from homeassistant.exceptions import HomeAssistantError
+
+        coordinator = self._coordinator()
+        coordinator.async_request_refresh = AsyncMock()
+
+        try:
+            asyncio.run(coordinator.async_set_fan_mode("warp"))
+        except HomeAssistantError as err:
+            assert "Unsupported fan mode" in str(err)
+        else:
+            raise AssertionError("expected HomeAssistantError for an unknown mode")
+        coordinator.async_request_refresh.assert_not_awaited()

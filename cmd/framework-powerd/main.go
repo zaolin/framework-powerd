@@ -20,6 +20,7 @@ import (
 	"github.com/zaolin/framework-powerd/internal/api"
 	"github.com/zaolin/framework-powerd/internal/config"
 	"github.com/zaolin/framework-powerd/internal/detector"
+	"github.com/zaolin/framework-powerd/internal/fan"
 	"github.com/zaolin/framework-powerd/internal/gpu"
 	"github.com/zaolin/framework-powerd/internal/llm"
 	"github.com/zaolin/framework-powerd/internal/monitor"
@@ -134,6 +135,9 @@ func runServer() {
 		}
 	}
 	if err := cfg.NPU.Validate(); err != nil {
+		log.Fatalf("Invalid configuration: %v", err)
+	}
+	if err := cfg.Fan.Validate(); err != nil {
 		log.Fatalf("Invalid configuration: %v", err)
 	}
 
@@ -467,11 +471,21 @@ func runServer() {
 		go npuMonitor.Start(npuCtx)
 	}
 
+	// Start fan control (if enabled)
+	var fanMonitor *fan.Monitor
+	var fanCancel context.CancelFunc
+	var fanDone chan struct{}
+	if cfg.Fan.Enabled {
+		fanMonitor = fan.NewMonitor(cfg.Fan)
+		log.Printf("Fan control enabled (mode %s, floor %d%%)", cfg.Fan.Mode, cfg.Fan.GetMinDutyPercent())
+		fanDone = make(chan struct{})
+	}
+
 	// Start API Server (S3+S8: dedicated mux, explicit timeouts, body limits)
 	// Collect static system info once at startup.
 	sysInfo := sysinfo.Collect()
 
-	apiServer := api.NewServer(pm, powerMon, jwtSecret, smartdMonitor, nvmeMonitor, llmMonitor, npuMonitor, gpuMonitor, sysInfo)
+	apiServer := api.NewServer(pm, powerMon, jwtSecret, smartdMonitor, nvmeMonitor, llmMonitor, npuMonitor, fanMonitor, gpuMonitor, sysInfo)
 
 	mux := http.NewServeMux()
 
@@ -484,6 +498,8 @@ func runServer() {
 	llmHandler := apiServer.AuthMiddleware(apiServer.HandleLLMStats)
 	npuHandler := apiServer.AuthMiddleware(apiServer.HandleNPUStats)
 	npuModeHandler := apiServer.AuthMiddleware(apiServer.RateLimit(apiServer.HandleNPUPowerMode))
+	fanHandler := apiServer.AuthMiddleware(apiServer.HandleFanStats)
+	fanModeHandler := apiServer.AuthMiddleware(apiServer.RateLimit(apiServer.HandleFanMode))
 
 	// When auth is disabled (--disable-auth), AuthMiddleware passes through.
 	if authEnabled {
@@ -503,6 +519,8 @@ func runServer() {
 	mux.HandleFunc("/llm/stats", llmHandler)
 	mux.HandleFunc("/npu/stats", npuHandler)
 	mux.HandleFunc("/npu/power-mode", npuModeHandler)
+	mux.HandleFunc("/fan/stats", fanHandler)
+	mux.HandleFunc("/fan/mode", fanModeHandler)
 	// S8: 404 catch-all for unmatched paths.
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
@@ -522,6 +540,19 @@ func runServer() {
 	ln, err := net.Listen("tcp", addr)
 	if err != nil {
 		log.Fatalf("Failed to listen on %s: %v", addr, err)
+	}
+
+	// Start the fan only after the listener is bound: a failed bind exits via
+	// log.Fatalf, which skips deferred cleanup, and the fan must not be left on
+	// a manual duty.
+	if fanMonitor != nil {
+		fanCtx, cancel := context.WithCancel(context.Background())
+		fanCancel = cancel
+		defer cancel()
+		go func() {
+			defer close(fanDone)
+			fanMonitor.Start(fanCtx)
+		}()
 	}
 
 	serverErr := make(chan error, 1)
@@ -568,6 +599,15 @@ func runServer() {
 
 	close(shutdownStarted)
 	_, _ = daemon.SdNotify(false, daemon.SdNotifyStopping)
+
+	// Hand the fan back to the EC before anything else, so a stuck daemon can
+	// never leave a manual duty behind.
+	if fanMonitor != nil {
+		if fanCancel != nil {
+			fanCancel()
+		}
+		<-fanDone
+	}
 
 	// Stop producing new power samples, then flush the final metrics state.
 	pwrCancel()

@@ -4,6 +4,29 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 semantic versioning.
 
+## [1.8.0] - 2026-11-02
+
+### Added
+
+- EC fan control in `internal/fan`: a duty-based curve with a 50 % floor, a ramp
+  from 75 to 90 °C, 3 °C hysteresis, a 90 s dwell after an increase and a 3 %
+  per update fall. A critical sensor forces 100 % at 90 °C, a mainboard sensor
+  at 85 °C.
+- `fan` configuration section with validation and an `auto` mode that leaves
+  the EC in charge.
+- `GET /fan/stats`, `POST /fan/mode`, the `fan` block in `GET /status` and
+  `monitors.fan` in `/healthz`.
+- Home Assistant sensors for fan speed, commanded duty and the mainboard
+  temperatures, plus a Fan Mode select.
+- The systemd unit runs `framework_tool --autofanctrl` as `ExecStopPost`, so a
+  stop, crash or watchdog kill returns the fan to the EC.
+
+### Fixed
+
+- NVMe controllers are discovered again. `/sys/class/nvme/*` are symlinks and
+  `os.ReadDir` does not follow them, so discovery reported `no_devices` on every
+  host and no NVMe temperature or health was exposed.
+
 ## [1.7.0] - 2026-11-01
 
 ### Added
