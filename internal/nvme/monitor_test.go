@@ -169,6 +169,52 @@ func TestDiscoverDevices(t *testing.T) {
 	}
 }
 
+// TestDiscoverDevicesSymlink covers the real sysfs layout: /sys/class/nvme/nvme0
+// is a symlink to the controller directory. os.ReadDir does not follow it, so
+// discovery must stat the target instead of trusting DirEntry.IsDir.
+func TestDiscoverDevicesSymlink(t *testing.T) {
+	base := t.TempDir()
+	real := filepath.Join(base, "devices", "pci0000:00", "nvme", "nvme0")
+	if err := os.MkdirAll(real, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(real, "model"), []byte("WD_BLACK SN850X 2000GB\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(real, "serial"), []byte("23202F801634\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(real, filepath.Join(base, "nvme0")); err != nil {
+		t.Fatal(err)
+	}
+
+	devices, err := discoverDevices(base)
+	if err != nil {
+		t.Fatalf("discoverDevices: %v", err)
+	}
+	if len(devices) != 1 {
+		t.Fatalf("devices = %d, want 1 for a symlinked controller", len(devices))
+	}
+	if devices[0].Path != "/dev/nvme0" || devices[0].Model != "WD_BLACK SN850X 2000GB" {
+		t.Errorf("device = %+v", devices[0])
+	}
+
+	// A dangling symlink and a plain file with an nvme prefix must be ignored.
+	if err := os.Symlink(filepath.Join(base, "missing"), filepath.Join(base, "nvme1")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(base, "nvme2"), nil, 0644); err != nil {
+		t.Fatal(err)
+	}
+	devices, err = discoverDevices(base)
+	if err != nil {
+		t.Fatalf("discoverDevices: %v", err)
+	}
+	if len(devices) != 1 {
+		t.Errorf("devices = %d, want only the valid controller", len(devices))
+	}
+}
+
 type fakeRunner struct {
 	outputs map[string][]byte
 	errs    map[string]error

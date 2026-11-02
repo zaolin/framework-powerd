@@ -142,7 +142,13 @@ func discoverDevices(baseDir string) ([]deviceInfo, error) {
 
 	var devices []deviceInfo
 	for _, entry := range entries {
-		if !strings.HasPrefix(entry.Name(), "nvme") || !entry.IsDir() {
+		if !strings.HasPrefix(entry.Name(), "nvme") {
+			continue
+		}
+		// /sys/class/nvme/* are symlinks and os.ReadDir does not follow them,
+		// so IsDir() is false even for a real controller. Stat the target.
+		target, err := os.Stat(filepath.Join(baseDir, entry.Name()))
+		if err != nil || !target.IsDir() {
 			continue
 		}
 		dir := filepath.Join(baseDir, entry.Name())
