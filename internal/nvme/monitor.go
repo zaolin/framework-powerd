@@ -269,7 +269,14 @@ func parseNVMeLog(data []byte) (deviceValues, error) {
 	if !hasHealthFields(doc) {
 		return deviceValues{}, fmt.Errorf("no NVMe health fields in nvme output")
 	}
-	return valuesFromMap(doc), nil
+	values := valuesFromMap(doc)
+	// nvme-cli reports the raw SMART value, which the NVMe spec defines in
+	// Kelvin. smartctl reports Celsius, so only this path converts. Any real
+	// drive temperature is far below 200, which makes the check unambiguous.
+	if values.temperatureC > 200 {
+		values.temperatureC -= 273
+	}
+	return values, nil
 }
 
 type smartctlDoc struct {

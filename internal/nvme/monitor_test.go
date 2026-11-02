@@ -27,7 +27,7 @@ func testConfig() config.NVMeConfig {
 func TestParseNVMeLog(t *testing.T) {
 	data := []byte(`{
 		"critical_warning": 0,
-		"temperature": 42,
+		"temperature": 315,
 		"avail_spare": 100,
 		"spare_thresh": 10,
 		"percent_used": 4,
@@ -59,7 +59,7 @@ func TestParseNVMeLog(t *testing.T) {
 func TestParseNVMeLog_StringValues(t *testing.T) {
 	data := []byte(`{
 		"critical_warning": "0",
-		"temperature": "55",
+		"temperature": "328",
 		"available_spare": "98",
 		"available_spare_threshold": "10",
 		"percentage_used": "12",
@@ -243,7 +243,7 @@ func TestPollDevices_NVMeCLI(t *testing.T) {
 	runner := &fakeRunner{
 		tools: map[string]bool{"nvme": true},
 		outputs: map[string][]byte{
-			"nvme": []byte(`{"critical_warning":0,"temperature":42,"avail_spare":100,"spare_thresh":10,"percent_used":4,"media_errors":0,"num_err_log_entries":0}`),
+			"nvme": []byte(`{"critical_warning":0,"temperature":315,"avail_spare":100,"spare_thresh":10,"percent_used":4,"media_errors":0,"num_err_log_entries":0}`),
 		},
 	}
 
@@ -322,5 +322,24 @@ func TestHealthSummary_DisabledOnError(t *testing.T) {
 	stats := Stats{Enabled: true, LastError: "neither nvme nor smartctl is installed"}
 	if got := stats.HealthSummary(); got != "disabled" {
 		t.Errorf("summary = %q, want disabled", got)
+	}
+}
+
+func TestParseNVMeLogKelvinConversion(t *testing.T) {
+	got, err := parseNVMeLog([]byte(`{"critical_warning":0,"temperature":302}`))
+	if err != nil {
+		t.Fatalf("parseNVMeLog: %v", err)
+	}
+	if got.temperatureC != 29 {
+		t.Errorf("temperature = %d, want 29 (302 K)", got.temperatureC)
+	}
+
+	// A Celsius value from an unusual tool version must stay untouched.
+	got, err = parseNVMeLog([]byte(`{"critical_warning":0,"temperature":45}`))
+	if err != nil {
+		t.Fatalf("parseNVMeLog: %v", err)
+	}
+	if got.temperatureC != 45 {
+		t.Errorf("temperature = %d, want 45", got.temperatureC)
 	}
 }

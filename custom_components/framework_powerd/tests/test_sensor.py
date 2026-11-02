@@ -908,3 +908,49 @@ class TestFanSensors:
 
         mock_coordinator.last_update_success = False
         assert FanSpeedSensor(mock_coordinator).available is False
+
+
+class TestNVMeSensorPresentation:
+    """Icons and precision for the per-device NVMe sensors."""
+
+    def test_healthy_counters_use_neutral_icons(self, mock_coordinator):
+        from custom_components.framework_powerd.sensor import (
+            NVMeCriticalWarningSensor,
+            NVMeErrorLogSensor,
+            NVMeMediaErrorsSensor,
+        )
+
+        device = "/dev/nvme0"
+        mock_coordinator.data["nvme"]["devices"][0]["critical_warning"] = 0
+        mock_coordinator.data["nvme"]["devices"][0]["media_errors"] = 0
+        mock_coordinator.data["nvme"]["devices"][0]["error_log_entries"] = 0
+
+        assert NVMeCriticalWarningSensor(mock_coordinator, device).icon == "mdi:check-circle-outline"
+        assert NVMeMediaErrorsSensor(mock_coordinator, device).icon == "mdi:check-circle-outline"
+        assert NVMeErrorLogSensor(mock_coordinator, device).icon == "mdi:file-document-outline"
+
+    def test_non_zero_counters_use_warning_icons(self, mock_coordinator):
+        from custom_components.framework_powerd.sensor import (
+            NVMeCriticalWarningSensor,
+            NVMeErrorLogSensor,
+            NVMeMediaErrorsSensor,
+        )
+
+        device = "/dev/nvme0"
+        mock_coordinator.data["nvme"]["devices"][0]["critical_warning"] = 2
+        mock_coordinator.data["nvme"]["devices"][0]["media_errors"] = 3
+        mock_coordinator.data["nvme"]["devices"][0]["error_log_entries"] = 4
+
+        assert NVMeCriticalWarningSensor(mock_coordinator, device).icon == "mdi:alert-octagon"
+        assert NVMeMediaErrorsSensor(mock_coordinator, device).icon == "mdi:alert-circle"
+        assert NVMeErrorLogSensor(mock_coordinator, device).icon == "mdi:file-alert"
+
+    def test_percentages_have_no_decimals(self, mock_coordinator):
+        from custom_components.framework_powerd.sensor import (
+            NVMeAvailableSpareSensor,
+            NVMePercentageUsedSensor,
+        )
+
+        device = "/dev/nvme0"
+        assert NVMeAvailableSpareSensor(mock_coordinator, device)._attr_suggested_display_precision == 0
+        assert NVMePercentageUsedSensor(mock_coordinator, device)._attr_suggested_display_precision == 0

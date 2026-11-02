@@ -723,7 +723,7 @@ class NVMePercentageUsedSensor(NVMeDeviceSensor):
     sensor_name = "Percentage Used"
     value_key = "percentage_used"
     native_unit = "%"
-    precision = 1
+    precision = 0
     icon_name = "mdi:chart-donut"
 
 
@@ -732,7 +732,7 @@ class NVMeAvailableSpareSensor(NVMeDeviceSensor):
     sensor_name = "Available Spare"
     value_key = "available_spare"
     native_unit = "%"
-    precision = 1
+    precision = 0
     icon_name = "mdi:shield-check"
 
 
@@ -742,12 +742,20 @@ class NVMeMediaErrorsSensor(NVMeDeviceSensor):
     value_key = "media_errors"
     icon_name = "mdi:alert-circle"
 
+    @property
+    def icon(self):
+        return "mdi:alert-circle" if (self.native_value or 0) > 0 else "mdi:check-circle-outline"
+
 
 class NVMeErrorLogSensor(NVMeDeviceSensor):
     sensor_key = "error_log_entries"
     sensor_name = "Error Log Entries"
     value_key = "error_log_entries"
-    icon_name = "mdi:script-text-alert"
+    icon_name = "mdi:file-document-outline"
+
+    @property
+    def icon(self):
+        return "mdi:file-alert" if (self.native_value or 0) > 0 else "mdi:file-document-outline"
 
 
 class NVMeCriticalWarningSensor(NVMeDeviceSensor):
@@ -755,6 +763,10 @@ class NVMeCriticalWarningSensor(NVMeDeviceSensor):
     sensor_name = "Critical Warning"
     value_key = "critical_warning"
     icon_name = "mdi:alert-octagon"
+
+    @property
+    def icon(self):
+        return "mdi:alert-octagon" if (self.native_value or 0) > 0 else "mdi:check-circle-outline"
 
 
 class NVMeTemperatureSensor(NVMeDeviceSensor):

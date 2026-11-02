@@ -4,6 +4,18 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 semantic versioning.
 
+## [1.8.1] - 2026-11-02
+
+### Fixed
+
+- NVMe temperatures are correct. `nvme smart-log --output-format=json` reports
+  the raw SMART value in Kelvin, while `smartctl` reports Celsius; the parser
+  treated both as Celsius, so a 29 °C drive was shown as 320 °C and the health
+  check reported `critical`.
+- Healthy NVMe counter sensors no longer use warning icons. Critical Warning,
+  Media Errors and Error Log Entries show a neutral icon at zero, and
+  Percentage Used and Available Spare no longer show a decimal.
+
 ## [1.8.0] - 2026-11-02
 
 ### Added
