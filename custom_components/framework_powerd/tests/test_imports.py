@@ -107,3 +107,4 @@ def test_manifest_key_order():
     keys = list(manifest)
     assert keys[:2] == ["domain", "name"]
     assert keys[2:] == sorted(keys[2:])
+    assert manifest["issue_tracker"] == manifest["documentation"].rstrip("/") + "/issues"

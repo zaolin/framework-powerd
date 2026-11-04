@@ -8,6 +8,7 @@
   "dependencies": [],
   "documentation": "https://github.com/zaolin/framework-powerd",
   "iot_class": "local_polling",
+  "issue_tracker": "https://github.com/zaolin/framework-powerd/issues",
   "requirements": [],
   "version": "1.9.0"
 }
