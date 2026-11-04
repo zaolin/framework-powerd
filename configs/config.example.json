@@ -8,7 +8,7 @@
   "smartd": {
     "enabled": true,
     "service_unit": "smartd.service",
-    "notify_service": "notify.mobile_app_pixel_11_pro",
+    "notify_service": "notify.mobile_app_phone",
     "alert_retention": "168h",
     "state_file": "/var/lib/framework-powerd/alerts.json"
   },

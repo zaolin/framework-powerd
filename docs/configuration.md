@@ -97,8 +97,9 @@ JSON format) in front of `llama-server`; see [LLM Request Accounting](llm.md).
 | `save_interval` | duration | `1m` | Periodic flush interval. |
 | `ignore_local_ip` | bool | `true` | Skip loopback traffic. |
 
-The access log must be readable by the daemon. `/var/log/caddy` is root-only,
-so the daemon has to run as root.
+The access log must be readable by the daemon. `/var/log/caddy` is often
+root-only; the shipped unit runs as root. Otherwise grant the daemon user read
+access to the file.
 
 ### `pricing`
 
@@ -177,12 +178,37 @@ Optional overrides for the peripheral power estimator. Zero values mean
 
 ## Validation
 
-- `server.port` must be 1–65535.
-- `server.idle_timeout` and `metrics.save_interval` must be valid Go durations greater than zero.
-- `metrics.state_file` must not be empty when `metrics.persist` is true.
+Validation runs at startup. The `nvme`, `npu`, `fan` and `llm` checks apply
+only when their section is enabled, and `pricing` is checked when LLM accounting
+is enabled. Invalid values abort startup instead of silently falling back, with
+two exceptions: an unparsable or non-positive `gpu.poll_interval` falls back to
+5 s because GPU monitoring has no validation, and `metrics.save_interval` is
+only checked when `metrics.persist` is true. `smartd.alert_retention` is checked
+whenever it is set.
 
-Invalid values abort startup with a clear error instead of silently falling
-back.
+- `server.port` must be 1–65535; `server.idle_timeout` must be a positive Go
+  duration.
+- `smartd.alert_retention` must be a positive duration.
+- `metrics.state_file` must be set and `metrics.save_interval` must be a
+  positive duration when `metrics.persist` is true.
+- `nvme.poll_interval` must be positive. `warn_percentage_used` and
+  `crit_percentage_used` are 0–100 and the warning threshold must be lower;
+  `warn_available_spare` is 0–100; temperature thresholds must be positive with
+  the warning below the critical value; error thresholds must not be negative
+  and the warning must be below the critical value.
+- `npu.poll_interval` must be at least 1 s when set; `npu.device` must point
+  into `/dev/accel`.
+- `fan.mode` must be `auto` or `curve`; `min_duty_percent` and
+  `fall_step_percent` are 0–100; `full_temp_c` must be above `start_temp_c`;
+  `critical_temp_c` must not be below `full_temp_c`; `board_critical_temp_c`
+  is 0–125; `hysteresis_c` is 0–30; `poll_interval` must be at least 1 s.
+- `llm.access_log` must be set and `counted_paths` must not be empty when LLM
+  accounting is enabled; `history_days` must not be negative; group names must
+  be non-empty and unique (case-insensitive); group CIDRs must be valid CIDRs
+  or IPs; `exclude_ips` entries must be valid IPs; `save_interval` must be a
+  positive duration.
+- When LLM accounting is enabled, `pricing.energy_price_per_kwh` must not be
+  negative and `pricing.currency` must be a three-letter ISO 4217 code.
 
 ## Example
 
@@ -243,9 +269,20 @@ back.
     "enabled": false,
     "access_log": "/var/log/caddy/llm-access.log",
     "ignore_local_ip": true,
+    "exclude_ips": [],
     "groups": [
       {"name": "home", "cidrs": ["192.168.0.0/16"]},
       {"name": "vpn", "cidrs": ["10.8.0.0/24"]}
+    ],
+    "counted_paths": [
+      "/v1/chat/completions",
+      "/chat/completions",
+      "/v1/completions",
+      "/completions",
+      "/v1/responses",
+      "/v1/messages",
+      "/v1/embeddings",
+      "/embedding"
     ],
     "history_days": 30,
     "state_file": "/var/lib/framework-powerd/llm.json",

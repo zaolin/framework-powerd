@@ -34,11 +34,10 @@ talks to the kernel directly.
 }
 ```
 
-| Key | Type | Default | Description |
-|---|---|---|---|
-| `enabled` | bool | `false` | Enable NPU monitoring. |
-| `poll_interval` | duration | `15s` | How often to query the device, minimum 1s. |
-| `device` | string | auto | Accel device node, for example `/dev/accel/accel0`. Empty means auto-detect. |
+`poll_interval` defaults to `15s` and has a minimum of 1 s. `device` defaults
+to auto-detection; set it to an accel node such as `/dev/accel/accel0` to pin
+one. All keys and validation rules are in
+[Configuration](configuration.md#npu).
 
 Auto-detection scans `/sys/class/accel` for a device driven by `amdxdna` (PCI
 vendor `0x1022`, device `0x17f0`).
@@ -117,31 +116,31 @@ When contexts exist they are included:
 
 ## Home Assistant entities
 
-The telemetry sensors are only created when an NPU is present. The presence
-binary sensor and the power-mode select are always registered so they can show
-the device arriving or leaving.
+The entities live on the **NPU** sub-device under the daemon device. Entity
+names on that device:
 
 | Entity | Unit | Source |
 |---|---|---|
-| NPU Present | binary sensor | `npu.present` |
-| NPU Power | W | `npu.power_watts` |
-| NPU Column Utilization | % | `npu.column_utilization_avg` |
-| NPU MP-NPU Clock | MHz | `npu.mp_npu_clock_mhz` |
-| NPU H Clock | MHz | `npu.h_clock_mhz` |
-| NPU TOPs | count | `npu.tops_current` |
-| NPU Active Contexts | count | number of `npu.contexts` |
-| NPU Firmware | text | `npu.firmware_version` |
-| NPU Power State | text | `npu.power_state` |
-| NPU Power Mode | select | `npu.power_mode` |
+| Present | binary sensor | `npu.present` |
+| Power | W | `npu.power_watts` |
+| Column Utilization | % | `npu.column_utilization_avg` |
+| MP-NPU Clock | MHz (diagnostic) | `npu.mp_npu_clock_mhz` |
+| H Clock | MHz (diagnostic) | `npu.h_clock_mhz` |
+| TOPs | count (diagnostic) | `npu.tops_current` |
+| Active Contexts | count (diagnostic) | number of `npu.contexts` |
+| Firmware | text (diagnostic) | `npu.firmware_version` |
+| Power State | text (diagnostic) | `npu.power_state` |
+| Power Mode | select | `npu.power_mode` |
 
 The column sensor carries the per-column values and the maximum as attributes.
 The H clock sensor carries the maximum clock as `max_mhz`. The context sensor
 carries the full context table, including the owning PID.
 
-`NPU Present` and `NPU Power Mode` are always created so they can report the
-device appearing later. The binary sensor stays available and reports off while
-no NPU is detected; the select is unavailable until a device appears. The other
-NPU sensors are only created when a device is present.
+`Present` and the Power Mode select are registered unconditionally so they can
+report the device appearing later. The binary sensor reports off while no NPU is
+detected; both entities are unavailable while NPU monitoring is disabled. The
+remaining NPU sensors are only created when a device is present. See
+[Home Assistant entities](home_assistant.md).
 
 ## What the numbers mean
 

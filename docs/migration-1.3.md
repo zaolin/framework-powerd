@@ -1,4 +1,9 @@
-# Migrating to 1.3
+# Migrating to 1.3 (historical)
+
+> This page documents the one-time move from 1.2 to 1.3. It is kept for
+> reference and does not describe the current release. Current configuration,
+> entities and endpoints are in [Configuration](configuration.md),
+> [Home Assistant entities](home_assistant.md) and [REST API](api.md).
 
 Version 1.3 removes the Ollama integration and adds persistent energy metrics,
 new Home Assistant memory/GPU sensors and operational hardening.

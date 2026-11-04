@@ -96,25 +96,11 @@ In `/etc/framework-powerd/config.json`:
 "llm": {
   "enabled": true,
   "access_log": "/var/log/caddy/llm-access.log",
-  "ignore_local_ip": true,
-  "exclude_ips": [],
   "groups": [
     {"name": "home", "cidrs": ["192.168.0.0/16"]},
     {"name": "vpn", "cidrs": ["10.8.0.0/24"]}
   ],
-  "counted_paths": [
-    "/v1/chat/completions",
-    "/chat/completions",
-    "/v1/completions",
-    "/completions",
-    "/v1/responses",
-    "/v1/messages",
-    "/v1/embeddings",
-    "/embedding"
-  ],
-  "history_days": 30,
-  "state_file": "/var/lib/framework-powerd/llm.json",
-  "save_interval": "1m"
+  "state_file": "/var/lib/framework-powerd/llm.json"
 },
 "pricing": {
   "energy_price_per_kwh": 0.30,
@@ -122,30 +108,24 @@ In `/etc/framework-powerd/config.json`:
 }
 ```
 
+`counted_paths`, `exclude_ips`, `history_days`, `save_interval` and
+`ignore_local_ip` keep their defaults. Every key and default is listed in
+[Configuration](configuration.md#llm).
+
 Restart the daemon afterwards.
 
-> **Note**: `/var/log/caddy` is only readable by root and the `caddy` user.
-> The daemon must run as root (the shipped unit does) to read the access log.
+> **Note**: `/var/log/caddy` is often only readable by root and the `caddy`
+> user. The shipped unit runs as root; otherwise grant the daemon user read
+> access to the log.
 
-## Configuration reference
-
-| Key | Type | Default | Description |
-|---|---|---|---|
-| `enabled` | bool | `false` | Enable LLM request accounting. |
-| `access_log` | string | `/var/log/caddy/llm-access.log` | Path to the Caddy JSON access log. |
-| `groups` | list | `[]` | Named IP groups (`name` + `cidrs`). |
-| `exclude_ips` | list | `[]` | IPs that are never counted. |
-| `counted_paths` | list | inference paths | Only these request paths are counted. |
-| `history_days` | int | `30` | Days of history to keep, including today. |
-| `state_file` | string | `/var/lib/framework-powerd/llm.json` | Persisted accounting state. |
-| `save_interval` | duration | `1m` | Periodic flush interval. |
-| `ignore_local_ip` | bool | `true` | Skip loopback traffic. |
+## Configuration notes
 
 A CIDR may also be a single IP address. The first matching group wins. Group
 names are compared case-insensitively because they become Home Assistant entity
 names. `counted_paths` must not be empty while accounting is enabled, and
 `pricing.currency` must be a three-letter ISO 4217 code such as `EUR` or `USD`,
-because Home Assistant uses it as the unit of the cost sensor.
+because Home Assistant uses it as the unit of the cost sensor. All keys,
+defaults and validation rules are in [Configuration](configuration.md#llm).
 
 ## What is counted
 
@@ -159,20 +139,18 @@ stays in the previous day even if the daemon picks it up afterwards.
 
 ## Energy and cost attribution
 
-Each request is attributed an energy estimate of
+Each request is attributed an energy estimate based on the daemon's live power
+measurement:
 
 ```
 energy_kWh = measured_total_watts × duration_hours / 1000
 ```
 
 For example, 100 W for 10 seconds is `100 × (10 / 3600) / 1000 ≈ 0.00028 kWh`.
-
-using the daemon's live power measurement. The result is an estimate, not a
-metered value: several concurrent requests share the same measured power draw,
-so the attribution depends on the request duration rather than on the actual
-per-request energy.
-
-Cost is `energy_kWh × pricing.energy_price_per_kwh`.
+The result is an estimate, not a metered value: concurrent requests share the
+same measured draw, so attribution depends on request duration rather than on
+the actual per-request energy. Cost is
+`energy_kWh × pricing.energy_price_per_kwh`.
 
 ## API
 
@@ -199,24 +177,27 @@ The same block is part of `GET /status`. `/healthz` reports
 
 ## Home Assistant entities
 
+The entities live on the **LLM** sub-device under the daemon device. Entity
+names on that device:
+
 | Entity | Unit | Source |
 |---|---|---|
-| LLM Requests (Total) | count | `llm.total.count` |
-| LLM Requests Today | count | `llm.today.total` |
-| LLM Energy Today | kWh | `llm.today.total_energy_kwh` |
-| LLM Cost Today | currency | `llm.today.total_cost` |
-| LLM `<group>` Requests Today | count | `llm.today.by_group` |
-| LLM `<group>` Requests Today Share | % | group share of today |
-| LLM `<ip>` Requests Today | count | `llm.today.by_ip` |
+| Requests (Total) | count | `llm.total.count` |
+| Requests Today | count | `llm.today.total` |
+| Energy Today | kWh | `llm.today.total_energy_kwh` |
+| Cost Today | currency | `llm.today.total_cost` |
+| `<group>` Requests Today | count | `llm.today.by_group` |
+| `<group>` Requests Today Share | % | group share of today |
+| `<ip>` Requests Today | count | `llm.today.by_ip` |
 
 Group and client-IP entities are added as those clients first appear, without
 reloading the integration. The share of today's requests for a single IP is
 exposed as the `percent` attribute of its sensor. Because client addresses are
 unbounded in principle, the integration creates at most 25 per-IP sensors; the
 complete per-IP data is always available in the `by_ip` attribute of the
-`LLM Requests Today` sensor. The daily history is available as the `history`
+`Requests Today` sensor. The daily history is available as the `history`
 attribute on the total and today sensors, so it can be graphed without extra
-entities.
+entities. See [Home Assistant entities](home_assistant.md).
 
 ## Persistence
 

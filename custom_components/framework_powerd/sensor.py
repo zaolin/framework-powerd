@@ -65,6 +65,7 @@ async def async_setup_entry(
             GPUTTGFreeSensor(coord),
             GPUTTGUsageSensor(coord),
             GPUCPUUsageSensor(coord),
+            CPUTemperatureSensor(coord),
         ]
 
     def _npu_entities(coord):
@@ -243,6 +244,7 @@ class TunableModeSensor(FrameworkEntity, SensorEntity):
 class GamePIDSensor(FrameworkEntity, SensorEntity):
     _attr_name = "Game PID"
     _attr_unique_id = "game_pid"
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
     _attr_icon = "mdi:identifier"
 
     @property
@@ -253,6 +255,7 @@ class GamePIDSensor(FrameworkEntity, SensorEntity):
 class UptimeSensor(FrameworkEntity, SensorEntity):
     _attr_name = "Uptime"
     _attr_unique_id = "uptime"
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
     _attr_device_class = SensorDeviceClass.DURATION
     _attr_native_unit_of_measurement = UnitOfTime.SECONDS
     _attr_icon = "mdi:clock-outline"
@@ -355,6 +358,7 @@ class RAMFreeSensor(FrameworkEntity, SensorEntity):
 
     _attr_name = "RAM Free"
     _attr_unique_id = "ram_free"
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
     _attr_device_class = SensorDeviceClass.DATA_SIZE
     _attr_native_unit_of_measurement = UnitOfInformation.GIBIBYTES
     _attr_state_class = SensorStateClass.MEASUREMENT
@@ -372,6 +376,7 @@ class RAMAvailableSensor(FrameworkEntity, SensorEntity):
 
     _attr_name = "RAM Available"
     _attr_unique_id = "ram_available"
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
     _attr_device_class = SensorDeviceClass.DATA_SIZE
     _attr_native_unit_of_measurement = UnitOfInformation.GIBIBYTES
     _attr_state_class = SensorStateClass.MEASUREMENT
@@ -402,10 +407,18 @@ class RAMUsageSensor(FrameworkEntity, SensorEntity):
 # SMART Sensors
 
 
-class SmartdAlertsSensor(FrameworkEntity, SensorEntity):
+class SmartdSensorBase(FrameworkEntity, SensorEntity):
+    """Base for SMART entities, grouped on their own device."""
+
+    device_key = "smartd"
+    device_name = "SMART"
+    device_model = "SMART monitor"
+
+
+class SmartdAlertsSensor(SmartdSensorBase):
     """SMART alerts count sensor."""
 
-    _attr_name = "SMART Alerts"
+    _attr_name = "Alerts"
     _attr_icon = "mdi:alert"
     _attr_unique_id = "smartd_alerts_count"
 
@@ -419,7 +432,7 @@ class SmartdAlertsSensor(FrameworkEntity, SensorEntity):
         return {"alerts": self.coordinator.data.get("smartd", {}).get("alerts", [])}
 
 
-class SmartdDeviceSensor(FrameworkEntity, SensorEntity):
+class SmartdDeviceSensor(SmartdSensorBase):
     """Per-device SMART alert sensor."""
 
     _attr_icon = "mdi:harddisk"
@@ -427,7 +440,7 @@ class SmartdDeviceSensor(FrameworkEntity, SensorEntity):
     def __init__(self, coordinator, device_name):
         super().__init__(coordinator)
         self._device = device_name
-        self._attr_name = f"SMART {device_name}"
+        self._attr_name = device_name.replace("/dev/", "")
         self._attr_unique_id = f"smartd_{device_name.replace('/', '_')}"
 
     @property
@@ -447,10 +460,18 @@ class SmartdDeviceSensor(FrameworkEntity, SensorEntity):
 # GPU Sensors
 
 
-class GPUTemperatureSensor(FrameworkEntity, SensorEntity):
+class GPUSensorBase(FrameworkEntity, SensorEntity):
+    """Base for GPU entities, grouped on their own device."""
+
+    device_key = "gpu"
+    device_name = "GPU"
+    device_model = "AMD GPU"
+
+
+class GPUTemperatureSensor(GPUSensorBase):
     """GPU temperature sensor."""
 
-    _attr_name = "GPU Temperature"
+    _attr_name = "Temperature"
     _attr_unique_id = "gpu_temperature"
     _attr_device_class = SensorDeviceClass.TEMPERATURE
     _attr_native_unit_of_measurement = "°C"
@@ -463,10 +484,10 @@ class GPUTemperatureSensor(FrameworkEntity, SensorEntity):
         return gpu_data.get("temperature_celsius")
 
 
-class GPUPowerSensor(FrameworkEntity, SensorEntity):
+class GPUPowerSensor(GPUSensorBase):
     """GPU power sensor."""
 
-    _attr_name = "GPU Power"
+    _attr_name = "Power"
     _attr_unique_id = "gpu_power"
     _attr_device_class = SensorDeviceClass.POWER
     _attr_native_unit_of_measurement = UnitOfPower.WATT
@@ -479,10 +500,10 @@ class GPUPowerSensor(FrameworkEntity, SensorEntity):
         return gpu_data.get("power_watts")
 
 
-class GPUVRAMUsedSensor(FrameworkEntity, SensorEntity):
+class GPUVRAMUsedSensor(GPUSensorBase):
     """GPU VRAM used sensor."""
 
-    _attr_name = "GPU VRAM Used"
+    _attr_name = "VRAM Used"
     _attr_unique_id = "gpu_vram_used"
     _attr_device_class = SensorDeviceClass.DATA_SIZE
     _attr_state_class = SensorStateClass.MEASUREMENT
@@ -497,10 +518,11 @@ class GPUVRAMUsedSensor(FrameworkEntity, SensorEntity):
         return round(vram_bytes / (1024**3), 2)
 
 
-class GPUVRAMTotalSensor(FrameworkEntity, SensorEntity):
+class GPUVRAMTotalSensor(GPUSensorBase):
     """GPU VRAM total sensor."""
 
-    _attr_name = "GPU VRAM Total"
+    _attr_name = "VRAM Total"
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
     _attr_unique_id = "gpu_vram_total"
     _attr_device_class = SensorDeviceClass.DATA_SIZE
     _attr_state_class = SensorStateClass.MEASUREMENT
@@ -515,10 +537,11 @@ class GPUVRAMTotalSensor(FrameworkEntity, SensorEntity):
         return round(vram_bytes / (1024**3), 2)
 
 
-class GPUVRAMFreeSensor(FrameworkEntity, SensorEntity):
+class GPUVRAMFreeSensor(GPUSensorBase):
     """GPU VRAM free sensor."""
 
-    _attr_name = "GPU VRAM Free"
+    _attr_name = "VRAM Free"
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
     _attr_unique_id = "gpu_vram_free"
     _attr_device_class = SensorDeviceClass.DATA_SIZE
     _attr_state_class = SensorStateClass.MEASUREMENT
@@ -539,10 +562,10 @@ class GPUVRAMFreeSensor(FrameworkEntity, SensorEntity):
         return round(free / (1024**3), 2)
 
 
-class GPUVRAMUsageSensor(FrameworkEntity, SensorEntity):
+class GPUVRAMUsageSensor(GPUSensorBase):
     """GPU VRAM usage percentage."""
 
-    _attr_name = "GPU VRAM Usage"
+    _attr_name = "VRAM Usage"
     _attr_unique_id = "gpu_vram_usage"
     _attr_native_unit_of_measurement = "%"
     _attr_state_class = SensorStateClass.MEASUREMENT
@@ -560,10 +583,10 @@ class GPUVRAMUsageSensor(FrameworkEntity, SensorEntity):
         return round(percent, 1)
 
 
-class GPUTTGUsedSensor(FrameworkEntity, SensorEntity):
+class GPUTTGUsedSensor(GPUSensorBase):
     """GPU GTT used sensor."""
 
-    _attr_name = "GPU GTT Used"
+    _attr_name = "GTT Used"
     _attr_unique_id = "gpu_gtt_used"
     _attr_device_class = SensorDeviceClass.DATA_SIZE
     _attr_state_class = SensorStateClass.MEASUREMENT
@@ -578,10 +601,11 @@ class GPUTTGUsedSensor(FrameworkEntity, SensorEntity):
         return round(gtt_bytes / (1024**3), 2)
 
 
-class GPUTTGTotalSensor(FrameworkEntity, SensorEntity):
+class GPUTTGTotalSensor(GPUSensorBase):
     """GPU GTT total sensor."""
 
-    _attr_name = "GPU GTT Total"
+    _attr_name = "GTT Total"
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
     _attr_unique_id = "gpu_gtt_total"
     _attr_device_class = SensorDeviceClass.DATA_SIZE
     _attr_state_class = SensorStateClass.MEASUREMENT
@@ -596,10 +620,11 @@ class GPUTTGTotalSensor(FrameworkEntity, SensorEntity):
         return round(gtt_bytes / (1024**3), 2)
 
 
-class GPUTTGFreeSensor(FrameworkEntity, SensorEntity):
+class GPUTTGFreeSensor(GPUSensorBase):
     """GPU GTT free sensor."""
 
-    _attr_name = "GPU GTT Free"
+    _attr_name = "GTT Free"
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
     _attr_unique_id = "gpu_gtt_free"
     _attr_device_class = SensorDeviceClass.DATA_SIZE
     _attr_state_class = SensorStateClass.MEASUREMENT
@@ -619,10 +644,10 @@ class GPUTTGFreeSensor(FrameworkEntity, SensorEntity):
         return round(free / (1024**3), 2)
 
 
-class GPUTTGUsageSensor(FrameworkEntity, SensorEntity):
+class GPUTTGUsageSensor(GPUSensorBase):
     """GPU GTT usage percentage."""
 
-    _attr_name = "GPU GTT Usage"
+    _attr_name = "GTT Usage"
     _attr_unique_id = "gpu_gtt_usage"
     _attr_native_unit_of_measurement = "%"
     _attr_state_class = SensorStateClass.MEASUREMENT
@@ -656,6 +681,23 @@ class GPUCPUUsageSensor(FrameworkEntity, SensorEntity):
         return round(gpu_data.get("cpu_usage_percent", 0), 1)
 
 
+class CPUTemperatureSensor(FrameworkEntity, SensorEntity):
+    """CPU die temperature from k10temp."""
+
+    _attr_name = "CPU Temperature"
+    _attr_unique_id = "cpu_temperature"
+    _attr_device_class = SensorDeviceClass.TEMPERATURE
+    _attr_native_unit_of_measurement = "°C"
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_suggested_display_precision = 1
+    _attr_icon = "mdi:thermometer"
+
+    @property
+    def native_value(self):
+        value = (self.coordinator.data.get("gpu") or {}).get("cpu_temperature_celsius")
+        return value if value else None
+
+
 # NVMe Sensors
 
 
@@ -673,9 +715,10 @@ class NVMeDeviceSensor(FrameworkEntity, SensorEntity):
     icon_name = "mdi:harddisk"
 
     def __init__(self, coordinator, device):
-        super().__init__(coordinator)
+        # Set the device before the base initializer: device_info reads it.
         self._device = device
-        self._attr_name = f"NVMe {device} {self.sensor_name}"
+        super().__init__(coordinator)
+        self._attr_name = self.sensor_name
         self._attr_unique_id = f"nvme_{device.replace('/', '_')}_{self.sensor_key}"
         self._attr_native_unit_of_measurement = self.native_unit
         self._attr_device_class = self.device_class
@@ -683,6 +726,29 @@ class NVMeDeviceSensor(FrameworkEntity, SensorEntity):
         self._attr_icon = self.icon_name
         if self.precision is not None:
             self._attr_suggested_display_precision = self.precision
+
+    @property
+    def device_key(self):
+        return f"nvme:{self._device}"
+
+    @property
+    def device_name(self):
+        return f"NVMe {self._device.replace('/dev/', '')}"
+
+    @property
+    def device_model(self):
+        return self._device_data.get("model") or "NVMe SSD"
+
+    @property
+    def device_info(self):
+        info = super().device_info
+        # The base sets the daemon version; a drive's software version is its
+        # firmware, so never fall back to the daemon version here.
+        info.pop("sw_version", None)
+        firmware = self._device_data.get("firmware")
+        if firmware:
+            info["sw_version"] = firmware
+        return info
 
     @property
     def _device_data(self):
@@ -719,6 +785,7 @@ class NVMeHealthSensor(NVMeDeviceSensor):
 
 
 class NVMePercentageUsedSensor(NVMeDeviceSensor):
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
     sensor_key = "percentage_used"
     sensor_name = "Percentage Used"
     value_key = "percentage_used"
@@ -728,6 +795,7 @@ class NVMePercentageUsedSensor(NVMeDeviceSensor):
 
 
 class NVMeAvailableSpareSensor(NVMeDeviceSensor):
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
     sensor_key = "available_spare"
     sensor_name = "Available Spare"
     value_key = "available_spare"
@@ -737,6 +805,7 @@ class NVMeAvailableSpareSensor(NVMeDeviceSensor):
 
 
 class NVMeMediaErrorsSensor(NVMeDeviceSensor):
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
     sensor_key = "media_errors"
     sensor_name = "Media Errors"
     value_key = "media_errors"
@@ -748,6 +817,7 @@ class NVMeMediaErrorsSensor(NVMeDeviceSensor):
 
 
 class NVMeErrorLogSensor(NVMeDeviceSensor):
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
     sensor_key = "error_log_entries"
     sensor_name = "Error Log Entries"
     value_key = "error_log_entries"
@@ -759,6 +829,7 @@ class NVMeErrorLogSensor(NVMeDeviceSensor):
 
 
 class NVMeCriticalWarningSensor(NVMeDeviceSensor):
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
     sensor_key = "critical_warning"
     sensor_name = "Critical Warning"
     value_key = "critical_warning"
@@ -780,6 +851,7 @@ class NVMeTemperatureSensor(NVMeDeviceSensor):
 
 
 class NVMeDataWrittenSensor(NVMeDeviceSensor):
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
     sensor_key = "data_written"
     sensor_name = "Data Written"
     value_key = "data_written_bytes"
@@ -791,6 +863,7 @@ class NVMeDataWrittenSensor(NVMeDeviceSensor):
 
 
 class NVMePowerOnHoursSensor(NVMeDeviceSensor):
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
     sensor_key = "power_on_hours"
     sensor_name = "Power-On Hours"
     value_key = "power_on_hours"
@@ -801,6 +874,7 @@ class NVMePowerOnHoursSensor(NVMeDeviceSensor):
 
 
 class NVMeUnsafeShutdownsSensor(NVMeDeviceSensor):
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
     sensor_key = "unsafe_shutdowns"
     sensor_name = "Unsafe Shutdowns"
     value_key = "unsafe_shutdowns"
@@ -822,10 +896,18 @@ NVME_SENSOR_CLASSES = [
 ]
 
 
-class NVMeStatusSensor(FrameworkEntity, SensorEntity):
+class StorageSensorBase(FrameworkEntity, SensorEntity):
+    """Base for aggregate storage entities."""
+
+    device_key = "storage"
+    device_name = "Storage"
+    device_model = "NVMe monitor"
+
+
+class NVMeStatusSensor(StorageSensorBase):
     """Aggregated NVMe polling status and diagnostics."""
 
-    _attr_name = "NVMe Status"
+    _attr_name = "Status"
     _attr_unique_id = "nvme_status"
     _attr_icon = "mdi:harddisk"
     _attr_entity_category = EntityCategory.DIAGNOSTIC
@@ -914,6 +996,10 @@ class DaemonHealthSensor(FrameworkEntity, SensorEntity):
 class NpuSensorBase(FrameworkEntity, SensorEntity):
     """Base class for AMD XDNA NPU sensors."""
 
+    device_key = "npu"
+    device_name = "NPU"
+    device_model = "AMD XDNA NPU"
+
     @property
     def _npu(self):
         return self.coordinator.data.get("npu") or {}
@@ -926,7 +1012,7 @@ class NpuSensorBase(FrameworkEntity, SensorEntity):
 class NpuPowerSensor(NpuSensorBase):
     """NPU power draw reported by the platform telemetry."""
 
-    _attr_name = "NPU Power"
+    _attr_name = "Power"
     _attr_unique_id = "npu_power"
     _attr_device_class = SensorDeviceClass.POWER
     _attr_native_unit_of_measurement = UnitOfPower.WATT
@@ -942,7 +1028,7 @@ class NpuPowerSensor(NpuSensorBase):
 class NpuColumnUtilizationSensor(NpuSensorBase):
     """Mean AIE column utilization, with the per-column values as attributes."""
 
-    _attr_name = "NPU Column Utilization"
+    _attr_name = "Column Utilization"
     _attr_unique_id = "npu_column_utilization"
     _attr_native_unit_of_measurement = "%"
     _attr_state_class = SensorStateClass.MEASUREMENT
@@ -964,7 +1050,7 @@ class NpuColumnUtilizationSensor(NpuSensorBase):
 class NpuMPNPUClockSensor(NpuSensorBase):
     """Current MP-NPU clock."""
 
-    _attr_name = "NPU MP-NPU Clock"
+    _attr_name = "MP-NPU Clock"
     _attr_unique_id = "npu_mp_npu_clock"
     _attr_device_class = SensorDeviceClass.FREQUENCY
     _attr_native_unit_of_measurement = UnitOfFrequency.MEGAHERTZ
@@ -980,7 +1066,7 @@ class NpuMPNPUClockSensor(NpuSensorBase):
 class NpuHClockSensor(NpuSensorBase):
     """Current H clock."""
 
-    _attr_name = "NPU H Clock"
+    _attr_name = "H Clock"
     _attr_unique_id = "npu_h_clock"
     _attr_device_class = SensorDeviceClass.FREQUENCY
     _attr_native_unit_of_measurement = UnitOfFrequency.MEGAHERTZ
@@ -1000,7 +1086,7 @@ class NpuHClockSensor(NpuSensorBase):
 class NpuTOPsSensor(NpuSensorBase):
     """Current TOPs, with the device maximum as an attribute."""
 
-    _attr_name = "NPU TOPs"
+    _attr_name = "TOPs"
     _attr_unique_id = "npu_tops"
     _attr_state_class = SensorStateClass.MEASUREMENT
     _attr_suggested_display_precision = 0
@@ -1019,7 +1105,7 @@ class NpuTOPsSensor(NpuSensorBase):
 class NpuActiveContextsSensor(NpuSensorBase):
     """Number of hardware contexts currently allocated on the NPU."""
 
-    _attr_name = "NPU Active Contexts"
+    _attr_name = "Active Contexts"
     _attr_unique_id = "npu_active_contexts"
     _attr_state_class = SensorStateClass.MEASUREMENT
     _attr_entity_category = EntityCategory.DIAGNOSTIC
@@ -1040,7 +1126,7 @@ class NpuActiveContextsSensor(NpuSensorBase):
 class NpuFirmwareSensor(NpuSensorBase):
     """NPU firmware version."""
 
-    _attr_name = "NPU Firmware"
+    _attr_name = "Firmware"
     _attr_unique_id = "npu_firmware"
     _attr_entity_category = EntityCategory.DIAGNOSTIC
     _attr_icon = "mdi:chip"
@@ -1053,7 +1139,7 @@ class NpuFirmwareSensor(NpuSensorBase):
 class NpuPowerStateSensor(NpuSensorBase):
     """NPU PCI power state (D0 while active, D3hot while suspended)."""
 
-    _attr_name = "NPU Power State"
+    _attr_name = "Power State"
     _attr_unique_id = "npu_power_state"
     _attr_entity_category = EntityCategory.DIAGNOSTIC
     _attr_icon = "mdi:power-plug"
@@ -1089,6 +1175,10 @@ def build_npu_entities(coord):
 class FanSensorBase(FrameworkEntity, SensorEntity):
     """Base class for EC fan sensors."""
 
+    device_key = "fan"
+    device_name = "Fan"
+    device_model = "EC fan"
+
     @property
     def _fan(self):
         return self.coordinator.data.get("fan") or {}
@@ -1109,7 +1199,7 @@ class FanSensorBase(FrameworkEntity, SensorEntity):
 class FanSpeedSensor(FanSensorBase):
     """Measured fan speed."""
 
-    _attr_name = "Fan Speed"
+    _attr_name = "Speed"
     _attr_unique_id = "fan_speed"
     _attr_native_unit_of_measurement = "RPM"
     _attr_state_class = SensorStateClass.MEASUREMENT
@@ -1124,7 +1214,7 @@ class FanSpeedSensor(FanSensorBase):
 class FanDutySensor(FanSensorBase):
     """Duty currently commanded by the daemon."""
 
-    _attr_name = "Fan Duty"
+    _attr_name = "Duty"
     _attr_unique_id = "fan_duty"
     _attr_native_unit_of_measurement = "%"
     _attr_state_class = SensorStateClass.MEASUREMENT
@@ -1161,7 +1251,6 @@ class FanCPUTemperatureSensor(FanSensorBase):
     _attr_native_unit_of_measurement = "°C"
     _attr_state_class = SensorStateClass.MEASUREMENT
     _attr_suggested_display_precision = 1
-    _attr_entity_category = EntityCategory.DIAGNOSTIC
     _attr_icon = "mdi:thermometer"
 
     @property
@@ -1188,6 +1277,10 @@ def build_fan_entities(coord):
 class LLMSensorBase(FrameworkEntity, SensorEntity):
     """Base class for LLM request accounting sensors."""
 
+    device_key = "llm"
+    device_name = "LLM"
+    device_model = "LLM accounting"
+
     @property
     def _llm(self):
         return self.coordinator.data.get("llm") or {}
@@ -1204,7 +1297,7 @@ class LLMSensorBase(FrameworkEntity, SensorEntity):
 class LLMRequestsTotalSensor(LLMSensorBase):
     """Total number of counted LLM requests since accounting state was created."""
 
-    _attr_name = "LLM Requests (Total)"
+    _attr_name = "Requests (Total)"
     _attr_unique_id = "llm_requests_total"
     _attr_state_class = SensorStateClass.TOTAL_INCREASING
     _attr_icon = "mdi:message-processing"
@@ -1229,7 +1322,7 @@ class LLMRequestsTotalSensor(LLMSensorBase):
 class LLMRequestsTodaySensor(LLMSensorBase):
     """Number of counted LLM requests today (UTC)."""
 
-    _attr_name = "LLM Requests Today"
+    _attr_name = "Requests Today"
     _attr_unique_id = "llm_requests_today"
     _attr_state_class = SensorStateClass.TOTAL_INCREASING
     _attr_icon = "mdi:calendar-today"
@@ -1251,7 +1344,7 @@ class LLMRequestsTodaySensor(LLMSensorBase):
 class LLMEnergyTodaySensor(LLMSensorBase):
     """Energy attributed to today's LLM requests."""
 
-    _attr_name = "LLM Energy Today"
+    _attr_name = "Energy Today"
     _attr_unique_id = "llm_energy_today"
     _attr_device_class = SensorDeviceClass.ENERGY
     _attr_native_unit_of_measurement = UnitOfEnergy.KILO_WATT_HOUR
@@ -1267,7 +1360,7 @@ class LLMEnergyTodaySensor(LLMSensorBase):
 class LLMCostTodaySensor(LLMSensorBase):
     """Cost attributed to today's LLM requests."""
 
-    _attr_name = "LLM Cost Today"
+    _attr_name = "Cost Today"
     _attr_unique_id = "llm_cost_today"
     _attr_device_class = SensorDeviceClass.MONETARY
     _attr_state_class = SensorStateClass.TOTAL
@@ -1300,7 +1393,7 @@ class LLMGroupRequestsSensor(LLMSensorBase):
     def __init__(self, coordinator, group):
         super().__init__(coordinator)
         self._group = group
-        self._attr_name = f"LLM {group.title()} Requests Today"
+        self._attr_name = f"{group.title()} Requests Today"
         self._attr_unique_id = f"llm_group_{group}_requests"
 
     @property
@@ -1323,7 +1416,7 @@ class LLMGroupPercentSensor(LLMSensorBase):
     def __init__(self, coordinator, group):
         super().__init__(coordinator)
         self._group = group
-        self._attr_name = f"LLM {group.title()} Requests Today Share"
+        self._attr_name = f"{group.title()} Requests Today Share"
         self._attr_unique_id = f"llm_group_{group}_percent"
 
     @property
@@ -1353,7 +1446,7 @@ class LLMIPRequestsSensor(LLMSensorBase):
     def __init__(self, coordinator, ip):
         super().__init__(coordinator)
         self._ip = ip
-        self._attr_name = f"LLM {ip} Requests Today"
+        self._attr_name = f"{ip} Requests Today"
         self._attr_unique_id = f"llm_ip_{ip.replace('.', '_').replace(':', '_')}"
 
     @property

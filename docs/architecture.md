@@ -12,9 +12,12 @@ services).
 | `internal/monitor` | Raw input watching, joystick deadzones, hotplug via fsnotify, idle timer. |
 | `internal/detector` | Steam game detection and Steam Remote Play virtual devices. |
 | `internal/power` | Power profile pinning, tunables, process pauser, turbostat, energy aggregation, metrics persistence. |
-| `internal/gpu` | AMD GPU sysfs metrics (VRAM/GTT/temperature/power) and CPU usage. |
+| `internal/gpu` | AMD GPU sysfs metrics (VRAM/GTT/temperature/power), CPU usage and CPU die temperature. |
 | `internal/nvme` | Direct NVMe SMART polling (`nvme smart-log` / `smartctl`) and threshold evaluation. |
 | `internal/smartd` | smartd journald alerts, sticky alert state and persistence. |
+| `internal/llm` | Caddy access-log tailing, per-IP/group request accounting, energy and cost estimates. |
+| `internal/npu` | AMD XDNA accel telemetry, context table and power-mode ioctl. |
+| `internal/fan` | EC fan sensors, duty curve, hysteresis and `framework_tool` control. |
 | `internal/peripherals` | USB/NVMe/fan/Wi-Fi/Ethernet power estimation. |
 | `internal/api` | HTTP control plane, JWT, rate limiting, `/healthz`. |
 | `internal/config` | JSON configuration and validation. |
@@ -71,7 +74,7 @@ flowchart TD
     Fan -->|"fansetduty / autofanctrl"| EC["Embedded controller"]
     Fan --> Status
     API --> Status
-    Status --> HA["Home Assistant integration"]
+    Status --> HA["Home Assistant integration\n(GPU/NPU/Fan/LLM/NVMe sub-devices)"]
     HA -->|"select / button / services"| API
 ```
 
@@ -82,10 +85,11 @@ interleave mode changes or pause/resume operations.
 The API exposes `/status` (including a `health` block and `tunable_mode`),
 `/healthz`, `/mode`, `/activity`, `/smartd/stats`, `/nvme/stats`, `/llm/stats`,
 `/npu/stats` and `/fan/stats`, plus `POST /npu/power-mode` and
-`POST /fan/mode`. The Home
-Assistant integration polls `/status`, creates notifications from SMART/NVMe
-warnings, and can call `/mode` and `/activity` through its select entity,
-button and services.
+`POST /fan/mode`. The Home Assistant integration polls `/status`, creates
+notifications from SMART/NVMe warnings, and can call `/mode`, `/activity`,
+`/npu/power-mode` and `/fan/mode` through its selects, button and services.
+Entities are grouped into sub-devices under the daemon device; see
+[Home Assistant entities](home_assistant.md).
 
 ## State machine
 
@@ -118,6 +122,16 @@ Only the secondary tunables (PCIe ASPM, powertop, USB/audio latency) change.
   --json=o -a`) every `nvme.poll_interval` (default 15 min). It evaluates wear,
   available spare, media errors, error-log growth and temperature against
   configurable thresholds.
+- **LLM monitor** tails the Caddy JSON access log, keeps only `counted_paths`,
+  attributes each request to an IP group, integrates the daemon's power draw
+  over the request duration and persists daily aggregates to `llm.json`.
+- **NPU monitor** queries the accel device every `npu.poll_interval` (default
+  15 s). Each query resumes the device briefly. If no device is present, the
+  monitor keeps watching instead of failing.
+- **Fan controller** reads the EC sensors every `fan.poll_interval` (default
+  5 s) and applies the duty curve with hysteresis and a fall step. The daemon
+  returns the fan to the EC on graceful shutdown; the systemd `ExecStopPost`
+  hook covers crashes and watchdog kills.
 
 ## Energy aggregation
 
@@ -150,11 +164,11 @@ Startup order:
 
 1. Load and validate config, apply explicit CLI overrides.
 2. Pin the balanced profile and validate external tools.
-3. Start idle, Remote Play, Steam and power monitors.
-4. Restore persisted metrics and alerts, then start turbostat and the
-   persistence loops.
-5. Start optional SMART, NVMe, LLM, NPU and GPU monitors. The NPU monitor keeps
-   watching for the device if it is not present yet.
+3. Start the idle, Remote Play and Steam detectors.
+4. Start the power monitor, which restores the metrics ring and starts
+   turbostat and the persistence loop; restore persisted SMART alerts.
+5. Start the optional SMART, NVMe, LLM, GPU and NPU monitors. The NPU monitor
+   keeps watching for the device if it is not present yet.
 6. Bind the HTTP listener, then start the fan controller, send systemd
    `READY=1` and start watchdog pings. The fan starts only after a successful
    bind, because a failed bind exits via `log.Fatalf` and would otherwise leave
@@ -166,15 +180,17 @@ Shutdown order:
 2. Stop the fan controller and return the fan to the EC.
 3. Stop the power monitor and flush the final metrics snapshot.
 4. Stop the SMART monitor and flush persisted alerts.
-5. Close the HTTP server with a 5-second grace period.
-6. Resume any paused game process tree before exiting.
+5. Stop the LLM poller and persistence loop, then flush `llm.json`.
+6. Close the HTTP server with a 5-second grace period.
+7. Resume any paused game process tree before exiting.
 
 The systemd unit also runs `framework_tool --autofanctrl` as `ExecStopPost`, so
 a crash or watchdog kill returns the fan even when this order cannot run.
 
 ## Security boundary
 
-The API is a control plane: it can switch power tunables and pause/resume
-processes. Authentication is fail-closed unless `--disable-auth` is passed. The
-systemd unit binds to localhost by default and runs with a hardened profile; see
+The API is a control plane: it can switch power tunables, pause/resume
+processes, change the NPU power mode and take over EC fan control. Authentication
+is fail-closed unless `--disable-auth` is passed. The systemd unit binds to
+localhost by default and runs with a hardened profile; see
 [Security](security.md).

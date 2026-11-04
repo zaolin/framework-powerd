@@ -66,7 +66,10 @@ class GamePausedBinarySensor(FrameworkEntity, BinarySensorEntity):
         return self.coordinator.data.get("is_game_paused")
 
 class SmartdAlertBinarySensor(FrameworkEntity, BinarySensorEntity):
-    _attr_name = "SMART Alert"
+    device_key = "smartd"
+    device_name = "SMART"
+    device_model = "SMART monitor"
+    _attr_name = "Alert"
     _attr_unique_id = "smartd_alert"
     _attr_device_class = BinarySensorDeviceClass.PROBLEM
 
@@ -79,7 +82,11 @@ class SmartdAlertBinarySensor(FrameworkEntity, BinarySensorEntity):
 class StorageHealthBinarySensor(FrameworkEntity, BinarySensorEntity):
     """Aggregated SMART/NVMe problem indicator."""
 
-    _attr_name = "Storage Health"
+    device_key = "storage"
+    device_name = "Storage"
+    device_model = "NVMe monitor"
+
+    _attr_name = "Health"
     _attr_unique_id = "storage_health"
     _attr_device_class = BinarySensorDeviceClass.PROBLEM
     _attr_icon = "mdi:harddisk"
@@ -133,7 +140,10 @@ class StorageHealthBinarySensor(FrameworkEntity, BinarySensorEntity):
 class NpuPresentBinarySensor(FrameworkEntity, BinarySensorEntity):
     """Presence of an AMD XDNA NPU."""
 
-    _attr_name = "NPU Present"
+    device_key = "npu"
+    device_name = "NPU"
+    device_model = "AMD XDNA NPU"
+    _attr_name = "Present"
     _attr_unique_id = "npu_present"
     _attr_icon = "mdi:expansion-card"
 

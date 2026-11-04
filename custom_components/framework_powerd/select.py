@@ -50,7 +50,10 @@ class FrameworkPowerTunableModeSelect(FrameworkEntity, SelectEntity):
 class FrameworkPowerNpuPowerModeSelect(FrameworkEntity, SelectEntity):
     """Select the AMD XDNA NPU power mode."""
 
-    _attr_name = "NPU Power Mode"
+    device_key = "npu"
+    device_name = "NPU"
+    device_model = "AMD XDNA NPU"
+    _attr_name = "Power Mode"
     _attr_unique_id = "npu_power_mode_select"
     _attr_options = NPU_POWER_MODES
     _attr_icon = "mdi:expansion-card"
@@ -75,7 +78,10 @@ class FrameworkPowerNpuPowerModeSelect(FrameworkEntity, SelectEntity):
 class FrameworkPowerFanModeSelect(FrameworkEntity, SelectEntity):
     """Select between the EC fan curve and the daemon curve."""
 
-    _attr_name = "Fan Mode"
+    device_key = "fan"
+    device_name = "Fan"
+    device_model = "EC fan"
+    _attr_name = "Mode"
     _attr_unique_id = "fan_mode_select"
     _attr_options = FAN_MODES
     _attr_icon = "mdi:fan"

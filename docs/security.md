@@ -1,8 +1,8 @@
 # Security
 
 The daemon's HTTP API is a **control plane**, not just a status endpoint. It can
-change power profiles and send `SIGSTOP`/`SIGCONT` to game process trees. Treat
-it accordingly.
+change power profiles, send `SIGSTOP`/`SIGCONT` to game process trees, switch the
+NPU power mode and take over EC fan control. Treat it accordingly.
 
 ## Authentication
 
@@ -47,9 +47,10 @@ leaves the control plane open. Only use it with `server.address=localhost`.
 
 ## Rate limiting
 
-`POST /mode`, `POST /activity` and `POST /npu/power-mode` are limited to 1
-request/second with a burst of 5 per client IP. The limiter keys on the IP, not the TCP source port, so
-opening new connections does not bypass it. Idle buckets are pruned.
+`POST /mode`, `POST /activity`, `POST /npu/power-mode` and `POST /fan/mode` are
+limited to 1 request/second with a burst of 5 per client IP. The limiter keys on
+the IP, not the TCP source port, so opening new connections does not bypass it.
+Idle buckets are pruned.
 
 ## systemd hardening
 
@@ -74,8 +75,11 @@ restart it.
 
 ## Data at rest
 
-- `metrics.json` contains only energy counters and timestamps. It contains no
-  credentials.
+- `metrics.json` contains only energy counters and timestamps.
+- `llm.json` contains request counts, IP addresses and daily aggregates. Treat
+  it as usage data, not as a secret.
+- `alerts.json` contains SMART/NVMe alert history and device names.
+- None of these files contain credentials.
 - The JWT secret lives in the config file or environment. Restrict permissions
   on the config file (`chmod 600` if it contains a secret).
 - Home Assistant diagnostics redact `token`, `jwt_secret`, `password`, `secret`

@@ -44,18 +44,8 @@ already runs as root.
 }
 ```
 
-| Key | Type | Default | Description |
-|---|---|---|---|
-| `enabled` | bool | `false` | Enable fan control. |
-| `mode` | string | `curve` | `auto` keeps the EC curve, `curve` uses the daemon curve. |
-| `min_duty_percent` | int | `50` | Duty floor below `start_temp_c`. 0 or unset means 50. |
-| `start_temp_c` | int | `75` | Temperature where the ramp starts. |
-| `full_temp_c` | int | `90` | Temperature that reaches 100 % duty. |
-| `critical_temp_c` | int | `90` | Hottest sensor that forces 100 % immediately. |
-| `board_critical_temp_c` | int | `85` | Mainboard sensor that forces 100 % immediately. |
-| `hysteresis_c` | int | `3` | Temperature band that must be cleared before the fan falls. |
-| `fall_step_percent` | int | `3` | Maximum decrease per update. |
-| `poll_interval` | duration | `5s` | Sensor and control interval, minimum 1 s. |
+`poll_interval` defaults to `5s` with a minimum of 1 s. Every key, default and
+validation rule is in [Configuration](configuration.md#fan).
 
 ## Behaviour
 
@@ -108,17 +98,20 @@ systemd hook are therefore the real protection.
 
 ## Home Assistant entities
 
+The entities live on the **Fan** sub-device under the daemon device. Entity
+names on that device:
+
 | Entity | Unit | Source |
 |---|---|---|
-| Fan Speed | RPM | `fan.sensors.fan_rpm` |
-| Fan Duty | % | `fan.duty_percent` |
+| Speed | RPM (diagnostic) | `fan.sensors.fan_rpm` |
+| Duty | % (diagnostic) | `fan.duty_percent` |
 | Mainboard Temperature | °C | `fan.sensors.board_celsius` |
 | CPU Board Temperature | °C | `fan.sensors.cpu_ec_celsius` |
-| Fan Mode | select | `fan.mode` (`auto`, `curve`) |
+| Mode | select | `fan.mode` (`auto`, `curve`) |
 
-The `fan` block also carries the CPU, GPU and NVMe temperatures. GPU and NVMe
-are already exposed by their own sensors; the CPU value is available in the
-`fan` block for automations.
+The `fan` block also carries the CPU, GPU and NVMe temperatures. The CPU die
+temperature has its own **CPU Temperature** sensor on the daemon device; see
+[Home Assistant entities](home_assistant.md).
 
 ## Calibration notes
 

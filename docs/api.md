@@ -14,8 +14,9 @@ valid token. Non-Bearer schemes are rejected.
 
 ## Rate limiting
 
-`POST /mode` and `POST /activity` allow **1 request/second with a burst of 5**
-per client IP. Exceeding it returns `429 Too Many Requests`.
+`POST /mode`, `POST /activity`, `POST /npu/power-mode` and `POST /fan/mode`
+allow **1 request/second with a burst of 5** per client IP. Exceeding it returns
+`429 Too Many Requests`.
 
 All JSON responses set `Cache-Control: no-store`.
 
@@ -31,7 +32,7 @@ curl http://localhost:8080/healthz
 ```json
 {
   "status": "ok",
-  "version": "1.3.0",
+  "version": "1.9.0",
   "uptime_seconds": 12345.6,
   "is_idle": false,
   "power_sample_age_seconds": 1.2,
@@ -119,6 +120,7 @@ Full daemon state. Requires auth.
     "gtt_free_bytes": 23858216960,
     "gtt_used_percent": 4.57,
     "cpu_usage_percent": 0.6,
+    "cpu_temperature_celsius": 51,
     "temperature_celsius": 49,
     "power_watts": 9.0,
     "last_update": "2026-10-19T14:30:00Z"
@@ -156,7 +158,7 @@ Full daemon state. Requires auth.
     "cpu_model": "AMD Ryzen AI 7 350 w/ Radeon 860M",
     "cpu_count": 16,
     "total_ram_bytes": 50010562560,
-    "daemon_version": "1.8.0"
+    "daemon_version": "1.9.0"
   }
 }
 ```
@@ -166,13 +168,18 @@ Notes:
 - `mode` is always `balanced`: the APU profile trio is pinned.
 - `tunable_mode` is the internal gate: `performance` or `powersave`. It only
   selects the secondary tunables (ASPM, powertop, USB/audio latency).
-- `health` mirrors the `/healthz` payload: overall status, turbostat/NVMe
-  monitor state, power sample age and metrics persistence status.
-- `smartd` is added when SMART monitoring is enabled. `gpu` is added when GPU
-  monitoring is enabled. `npu` is added when NPU monitoring is enabled; it
-  always carries `present`, and the telemetry fields are filled only while a
-  device is available. `fan` is added when fan control is enabled; it carries
-  the mode, the commanded duty, the sensor set and the current RPM.
+- `health` mirrors the `/healthz` payload exactly (overall status, monitor
+  state, power sample age, metrics persistence) and is elided from the example
+  for brevity.
+- Optional blocks are omitted from the example above. `smartd` is added when
+  SMART monitoring is enabled; `gpu` when GPU monitoring is enabled; `nvme` when
+  NVMe polling is enabled; `llm` when LLM accounting is enabled (the block
+  matches `GET /llm/stats`); `npu` when NPU monitoring is enabled (always with
+  `present`, telemetry filled only while a device is available); `fan` when fan
+  control is enabled (mode, commanded duty, sensors, current RPM).
+- `gpu.cpu_temperature_celsius` is the CPU die temperature from `k10temp`;
+  the field is omitted when no `k10temp` sensor is available.
+  `gpu.temperature_celsius` is the GPU edge temperature.
 - `power.current.estimated_total_watts` includes peripheral estimates and VRM
   correction. `cor_watt` is a subset of `pkg_watt` and is not added again.
 - `memory.used_bytes = total - available`; `free_bytes` is literal `MemFree`.
@@ -242,7 +249,7 @@ curl -H "Authorization: Bearer $TOKEN" http://localhost:8080/smartd/stats
     }
   ],
   "last_check": "2026-10-19T14:30:00Z",
-  "notify_service": "notify.mobile_phone"
+  "notify_service": "notify.mobile_app_phone"
 }
 ```
 

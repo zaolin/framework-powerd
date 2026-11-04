@@ -12,6 +12,7 @@ type Stats struct {
 	GTTFreeBytes    int64     `json:"gtt_free_bytes"`
 	GTTUsedPercent  float64   `json:"gtt_used_percent"`
 	CPUUsagePercent float64   `json:"cpu_usage_percent"`
+	CPUTemperatureC int       `json:"cpu_temperature_celsius,omitempty"`
 	TemperatureC    int       `json:"temperature_celsius"`
 	PowerWatts      float64   `json:"power_watts"`
 	LastUpdate      time.Time `json:"last_update"`

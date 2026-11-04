@@ -52,11 +52,12 @@ class TestSmartdDeviceSensor:
         assert sensor.native_value == 0
 
     def test_dynamic_name(self, mock_coordinator):
-        """Test name includes device name."""
+        """Test the SMART device name supplies the prefix."""
         from custom_components.framework_powerd.sensor import SmartdDeviceSensor
 
         sensor = SmartdDeviceSensor(mock_coordinator, "/dev/sda")
-        assert sensor.name == "SMART /dev/sda"
+        assert sensor.name == "sda"
+        assert sensor.device_info["name"] == "SMART"
 
     def test_unique_id(self, mock_coordinator):
         """Test unique_id is generated correctly."""
@@ -117,7 +118,7 @@ class TestSystemInfoSensors:
         from custom_components.framework_powerd.sensor import DaemonVersionSensor
 
         sensor = DaemonVersionSensor(mock_coordinator)
-        assert sensor.native_value == "1.6.0"
+        assert sensor.native_value == "1.9.0"
 
     def test_kernel_version_unique_id(self, mock_coordinator):
         from custom_components.framework_powerd.sensor import KernelVersionSensor
@@ -664,7 +665,7 @@ class TestLLMSensors:
 
         sensor = LLMGroupPercentSensor(mock_coordinator, "home")
         assert sensor.native_value == 71.4
-        assert sensor._attr_name == "LLM Home Requests Today Share"
+        assert sensor._attr_name == "Home Requests Today Share"
         attrs = sensor.extra_state_attributes
         assert attrs["requests"] == 50
         assert attrs["total_requests"] == 70
@@ -893,7 +894,9 @@ class TestFanSensors:
     def test_builder(self, mock_coordinator):
         from custom_components.framework_powerd.sensor import build_fan_entities
 
-        assert sorted(type(e).__name__ for e in build_fan_entities(mock_coordinator)) == [
+        assert sorted(
+            type(e).__name__ for e in build_fan_entities(mock_coordinator)
+        ) == [
             "FanBoardTemperatureSensor",
             "FanCPUTemperatureSensor",
             "FanDutySensor",
@@ -925,9 +928,18 @@ class TestNVMeSensorPresentation:
         mock_coordinator.data["nvme"]["devices"][0]["media_errors"] = 0
         mock_coordinator.data["nvme"]["devices"][0]["error_log_entries"] = 0
 
-        assert NVMeCriticalWarningSensor(mock_coordinator, device).icon == "mdi:check-circle-outline"
-        assert NVMeMediaErrorsSensor(mock_coordinator, device).icon == "mdi:check-circle-outline"
-        assert NVMeErrorLogSensor(mock_coordinator, device).icon == "mdi:file-document-outline"
+        assert (
+            NVMeCriticalWarningSensor(mock_coordinator, device).icon
+            == "mdi:check-circle-outline"
+        )
+        assert (
+            NVMeMediaErrorsSensor(mock_coordinator, device).icon
+            == "mdi:check-circle-outline"
+        )
+        assert (
+            NVMeErrorLogSensor(mock_coordinator, device).icon
+            == "mdi:file-document-outline"
+        )
 
     def test_non_zero_counters_use_warning_icons(self, mock_coordinator):
         from custom_components.framework_powerd.sensor import (
@@ -941,8 +953,13 @@ class TestNVMeSensorPresentation:
         mock_coordinator.data["nvme"]["devices"][0]["media_errors"] = 3
         mock_coordinator.data["nvme"]["devices"][0]["error_log_entries"] = 4
 
-        assert NVMeCriticalWarningSensor(mock_coordinator, device).icon == "mdi:alert-octagon"
-        assert NVMeMediaErrorsSensor(mock_coordinator, device).icon == "mdi:alert-circle"
+        assert (
+            NVMeCriticalWarningSensor(mock_coordinator, device).icon
+            == "mdi:alert-octagon"
+        )
+        assert (
+            NVMeMediaErrorsSensor(mock_coordinator, device).icon == "mdi:alert-circle"
+        )
         assert NVMeErrorLogSensor(mock_coordinator, device).icon == "mdi:file-alert"
 
     def test_percentages_have_no_decimals(self, mock_coordinator):
@@ -952,5 +969,293 @@ class TestNVMeSensorPresentation:
         )
 
         device = "/dev/nvme0"
-        assert NVMeAvailableSpareSensor(mock_coordinator, device)._attr_suggested_display_precision == 0
-        assert NVMePercentageUsedSensor(mock_coordinator, device)._attr_suggested_display_precision == 0
+        assert (
+            NVMeAvailableSpareSensor(
+                mock_coordinator, device
+            )._attr_suggested_display_precision
+            == 0
+        )
+        assert (
+            NVMePercentageUsedSensor(
+                mock_coordinator, device
+            )._attr_suggested_display_precision
+            == 0
+        )
+
+
+class TestDeviceGrouping:
+    """Every component is grouped on its own sub-device."""
+
+    def test_gpu_device(self, mock_coordinator):
+        from custom_components.framework_powerd.sensor import GPUTemperatureSensor
+
+        info = GPUTemperatureSensor(mock_coordinator).device_info
+        assert info["name"] == "GPU"
+        assert info["model"] == "AMD GPU"
+        assert ("framework_powerd", "localhost:8080:gpu") in info["identifiers"]
+        assert info["via_device"] == ("framework_powerd", "localhost:8080")
+
+    def test_npu_device(self, mock_coordinator):
+        from custom_components.framework_powerd.sensor import NpuPowerSensor
+
+        info = NpuPowerSensor(mock_coordinator).device_info
+        assert info["name"] == "NPU"
+        assert ("framework_powerd", "localhost:8080:npu") in info["identifiers"]
+        assert info["via_device"] == ("framework_powerd", "localhost:8080")
+
+    def test_fan_device(self, mock_coordinator):
+        from custom_components.framework_powerd.sensor import FanSpeedSensor
+
+        info = FanSpeedSensor(mock_coordinator).device_info
+        assert info["name"] == "Fan"
+        assert ("framework_powerd", "localhost:8080:fan") in info["identifiers"]
+        assert info["via_device"] == ("framework_powerd", "localhost:8080")
+
+    def test_llm_device(self, mock_coordinator):
+        from custom_components.framework_powerd.sensor import LLMRequestsTotalSensor
+
+        info = LLMRequestsTotalSensor(mock_coordinator).device_info
+        assert info["name"] == "LLM"
+        assert ("framework_powerd", "localhost:8080:llm") in info["identifiers"]
+        assert info["via_device"] == ("framework_powerd", "localhost:8080")
+
+    def test_storage_device(self, mock_coordinator):
+        from custom_components.framework_powerd.sensor import NVMeStatusSensor
+
+        info = NVMeStatusSensor(mock_coordinator).device_info
+        assert info["name"] == "Storage"
+        assert info["model"] == "NVMe monitor"
+
+    def test_smart_device(self, mock_coordinator):
+        from custom_components.framework_powerd.sensor import SmartdAlertsSensor
+
+        info = SmartdAlertsSensor(mock_coordinator).device_info
+        assert info["name"] == "SMART"
+
+    def test_nvme_device_per_drive(self, mock_coordinator):
+        from custom_components.framework_powerd.sensor import NVMeTemperatureSensor
+
+        info = NVMeTemperatureSensor(mock_coordinator, "/dev/nvme0").device_info
+        assert info["name"] == "NVMe nvme0"
+        assert info["model"] == "WD_BLACK SN850X 2000GB"
+        assert info["sw_version"] == "620361WD"
+        assert ("framework_powerd", "localhost:8080:nvme:/dev/nvme0") in info[
+            "identifiers"
+        ]
+
+    def test_nvme_device_without_firmware(self, mock_coordinator):
+        from custom_components.framework_powerd.sensor import NVMeTemperatureSensor
+
+        mock_coordinator.data["nvme"]["devices"][0]["firmware"] = ""
+        info = NVMeTemperatureSensor(mock_coordinator, "/dev/nvme0").device_info
+        assert "sw_version" not in info
+
+    def test_cpu_temperature_stays_on_daemon(self, mock_coordinator):
+        from custom_components.framework_powerd.sensor import CPUTemperatureSensor
+
+        info = CPUTemperatureSensor(mock_coordinator).device_info
+        assert ("framework_powerd", "localhost:8080") in info["identifiers"]
+        assert "via_device" not in info
+
+    def test_main_device_has_no_parent(self, mock_coordinator):
+        from custom_components.framework_powerd.sensor import EstimatedTotalPowerSensor
+
+        info = EstimatedTotalPowerSensor(mock_coordinator).device_info
+        assert info["name"] == "Framework Power Daemon"
+        assert "via_device" not in info
+        assert ("framework_powerd", "localhost:8080") in info["identifiers"]
+
+
+class TestEntityCategories:
+    """Temperatures are normal sensors; internals are diagnostic."""
+
+    def test_all_temperatures_are_normal(self, mock_coordinator):
+        from homeassistant.helpers.entity import EntityCategory
+
+        from custom_components.framework_powerd.sensor import (
+            CPUTemperatureSensor,
+            FanBoardTemperatureSensor,
+            FanCPUTemperatureSensor,
+            GPUTemperatureSensor,
+            NVMeTemperatureSensor,
+        )
+
+        for sensor in (
+            CPUTemperatureSensor(mock_coordinator),
+            FanBoardTemperatureSensor(mock_coordinator),
+            FanCPUTemperatureSensor(mock_coordinator),
+            GPUTemperatureSensor(mock_coordinator),
+            NVMeTemperatureSensor(mock_coordinator, "/dev/nvme0"),
+        ):
+            assert getattr(sensor, "_attr_entity_category", None) is None, type(
+                sensor
+            ).__name__
+
+    def test_internal_values_are_diagnostic(self, mock_coordinator):
+        from homeassistant.helpers.entity import EntityCategory
+
+        from custom_components.framework_powerd.sensor import (
+            FanDutySensor,
+            GPUVRAMTotalSensor,
+            NVMePercentageUsedSensor,
+            NpuMPNPUClockSensor,
+        )
+
+        for sensor in (
+            FanDutySensor(mock_coordinator),
+            GPUVRAMTotalSensor(mock_coordinator),
+            NVMePercentageUsedSensor(mock_coordinator, "/dev/nvme0"),
+            NpuMPNPUClockSensor(mock_coordinator),
+        ):
+            assert sensor._attr_entity_category is EntityCategory.DIAGNOSTIC, type(
+                sensor
+            ).__name__
+
+    def test_cpu_temperature_sensor(self, mock_coordinator):
+        from custom_components.framework_powerd.sensor import CPUTemperatureSensor
+
+        sensor = CPUTemperatureSensor(mock_coordinator)
+        assert sensor.native_value == 51
+        assert sensor._attr_name == "CPU Temperature"
+
+    def test_cpu_temperature_unavailable_without_k10temp(self, mock_coordinator):
+        from custom_components.framework_powerd.sensor import CPUTemperatureSensor
+
+        del mock_coordinator.data["gpu"]["cpu_temperature_celsius"]
+        assert CPUTemperatureSensor(mock_coordinator).native_value is None
+
+
+class TestShortenedEntityNames:
+    """The device supplies the prefix, so entity names are short."""
+
+    def test_component_entity_names(self, mock_coordinator):
+        from custom_components.framework_powerd import sensor as s
+
+        nvme = "/dev/nvme0"
+        cases = [
+            (s.GPUTemperatureSensor(mock_coordinator), "Temperature"),
+            (s.GPUPowerSensor(mock_coordinator), "Power"),
+            (s.GPUVRAMUsedSensor(mock_coordinator), "VRAM Used"),
+            (s.GPUVRAMTotalSensor(mock_coordinator), "VRAM Total"),
+            (s.GPUVRAMFreeSensor(mock_coordinator), "VRAM Free"),
+            (s.GPUVRAMUsageSensor(mock_coordinator), "VRAM Usage"),
+            (s.GPUTTGUsedSensor(mock_coordinator), "GTT Used"),
+            (s.GPUTTGTotalSensor(mock_coordinator), "GTT Total"),
+            (s.GPUTTGFreeSensor(mock_coordinator), "GTT Free"),
+            (s.GPUTTGUsageSensor(mock_coordinator), "GTT Usage"),
+            (s.GPUCPUUsageSensor(mock_coordinator), "CPU Usage"),
+            (s.NpuPowerSensor(mock_coordinator), "Power"),
+            (s.NpuColumnUtilizationSensor(mock_coordinator), "Column Utilization"),
+            (s.NpuMPNPUClockSensor(mock_coordinator), "MP-NPU Clock"),
+            (s.NpuHClockSensor(mock_coordinator), "H Clock"),
+            (s.NpuTOPsSensor(mock_coordinator), "TOPs"),
+            (s.NpuActiveContextsSensor(mock_coordinator), "Active Contexts"),
+            (s.NpuFirmwareSensor(mock_coordinator), "Firmware"),
+            (s.NpuPowerStateSensor(mock_coordinator), "Power State"),
+            (s.FanSpeedSensor(mock_coordinator), "Speed"),
+            (s.FanDutySensor(mock_coordinator), "Duty"),
+            (s.FanBoardTemperatureSensor(mock_coordinator), "Mainboard Temperature"),
+            (s.FanCPUTemperatureSensor(mock_coordinator), "CPU Board Temperature"),
+            (s.LLMRequestsTotalSensor(mock_coordinator), "Requests (Total)"),
+            (s.LLMRequestsTodaySensor(mock_coordinator), "Requests Today"),
+            (s.LLMEnergyTodaySensor(mock_coordinator), "Energy Today"),
+            (s.LLMCostTodaySensor(mock_coordinator), "Cost Today"),
+            (s.LLMGroupRequestsSensor(mock_coordinator, "home"), "Home Requests Today"),
+            (s.LLMGroupPercentSensor(mock_coordinator, "home"), "Home Requests Today Share"),
+            (s.LLMIPRequestsSensor(mock_coordinator, "192.168.1.50"), "192.168.1.50 Requests Today"),
+            (s.NVMeHealthSensor(mock_coordinator, nvme), "Health"),
+            (s.NVMePercentageUsedSensor(mock_coordinator, nvme), "Percentage Used"),
+            (s.NVMeAvailableSpareSensor(mock_coordinator, nvme), "Available Spare"),
+            (s.NVMeMediaErrorsSensor(mock_coordinator, nvme), "Media Errors"),
+            (s.NVMeErrorLogSensor(mock_coordinator, nvme), "Error Log Entries"),
+            (s.NVMeCriticalWarningSensor(mock_coordinator, nvme), "Critical Warning"),
+            (s.NVMeTemperatureSensor(mock_coordinator, nvme), "Temperature"),
+            (s.NVMeDataWrittenSensor(mock_coordinator, nvme), "Data Written"),
+            (s.NVMePowerOnHoursSensor(mock_coordinator, nvme), "Power-On Hours"),
+            (s.NVMeUnsafeShutdownsSensor(mock_coordinator, nvme), "Unsafe Shutdowns"),
+            (s.NVMeStatusSensor(mock_coordinator), "Status"),
+            (s.SmartdAlertsSensor(mock_coordinator), "Alerts"),
+            (s.SmartdDeviceSensor(mock_coordinator, "/dev/sda"), "sda"),
+        ]
+        for entity, expected in cases:
+            assert entity._attr_name == expected, type(entity).__name__
+
+    def test_daemon_entities_keep_their_names(self, mock_coordinator):
+        from custom_components.framework_powerd.sensor import (
+            CPUTemperatureSensor,
+            DaemonHealthSensor,
+        )
+
+        assert CPUTemperatureSensor(mock_coordinator)._attr_name == "CPU Temperature"
+        assert DaemonHealthSensor(mock_coordinator)._attr_name == "Daemon Health"
+
+
+class TestAllEntityCategories:
+    """Every changed entity has the documented category."""
+
+    def test_normal_entities(self, mock_coordinator):
+        from custom_components.framework_powerd import sensor as s
+
+        nvme = "/dev/nvme0"
+        entities = [
+            s.GPUTemperatureSensor(mock_coordinator),
+            s.GPUPowerSensor(mock_coordinator),
+            s.GPUVRAMUsedSensor(mock_coordinator),
+            s.GPUVRAMUsageSensor(mock_coordinator),
+            s.GPUTTGUsedSensor(mock_coordinator),
+            s.GPUTTGUsageSensor(mock_coordinator),
+            s.GPUCPUUsageSensor(mock_coordinator),
+            s.CPUTemperatureSensor(mock_coordinator),
+            s.NpuPowerSensor(mock_coordinator),
+            s.NpuColumnUtilizationSensor(mock_coordinator),
+            s.FanBoardTemperatureSensor(mock_coordinator),
+            s.FanCPUTemperatureSensor(mock_coordinator),
+            s.NVMeHealthSensor(mock_coordinator, nvme),
+            s.NVMeTemperatureSensor(mock_coordinator, nvme),
+            s.RAMUsedSensor(mock_coordinator),
+            s.RAMUsageSensor(mock_coordinator),
+            s.LLMRequestsTotalSensor(mock_coordinator),
+            s.SmartdAlertsSensor(mock_coordinator),
+        ]
+        for entity in entities:
+            assert getattr(entity, "_attr_entity_category", None) is None, type(entity).__name__
+
+    def test_diagnostic_entities(self, mock_coordinator):
+        from homeassistant.helpers.entity import EntityCategory
+
+        from custom_components.framework_powerd import sensor as s
+
+        nvme = "/dev/nvme0"
+        entities = [
+            s.GPUVRAMTotalSensor(mock_coordinator),
+            s.GPUVRAMFreeSensor(mock_coordinator),
+            s.GPUTTGTotalSensor(mock_coordinator),
+            s.GPUTTGFreeSensor(mock_coordinator),
+            s.FanSpeedSensor(mock_coordinator),
+            s.FanDutySensor(mock_coordinator),
+            s.NpuMPNPUClockSensor(mock_coordinator),
+            s.NpuHClockSensor(mock_coordinator),
+            s.NpuTOPsSensor(mock_coordinator),
+            s.NpuActiveContextsSensor(mock_coordinator),
+            s.NpuFirmwareSensor(mock_coordinator),
+            s.NpuPowerStateSensor(mock_coordinator),
+            s.NVMePercentageUsedSensor(mock_coordinator, nvme),
+            s.NVMeAvailableSpareSensor(mock_coordinator, nvme),
+            s.NVMeMediaErrorsSensor(mock_coordinator, nvme),
+            s.NVMeErrorLogSensor(mock_coordinator, nvme),
+            s.NVMeCriticalWarningSensor(mock_coordinator, nvme),
+            s.NVMeDataWrittenSensor(mock_coordinator, nvme),
+            s.NVMePowerOnHoursSensor(mock_coordinator, nvme),
+            s.NVMeUnsafeShutdownsSensor(mock_coordinator, nvme),
+            s.NVMeStatusSensor(mock_coordinator),
+            s.RAMFreeSensor(mock_coordinator),
+            s.RAMAvailableSensor(mock_coordinator),
+            s.GamePIDSensor(mock_coordinator),
+            s.UptimeSensor(mock_coordinator),
+            s.TunableModeSensor(mock_coordinator),
+            s.DaemonHealthSensor(mock_coordinator),
+            s.KernelVersionSensor(mock_coordinator),
+            s.TotalRAMSensor(mock_coordinator),
+        ]
+        for entity in entities:
+            assert entity._attr_entity_category is EntityCategory.DIAGNOSTIC, type(entity).__name__

@@ -41,7 +41,7 @@ class TestSmartdAlertBinarySensor:
         from custom_components.framework_powerd.binary_sensor import SmartdAlertBinarySensor
         
         sensor = SmartdAlertBinarySensor(mock_coordinator)
-        assert sensor._attr_name == "SMART Alert"
+        assert sensor._attr_name == "Alert"
 
 
 class TestGameRunningBinarySensor:
@@ -137,3 +137,34 @@ class TestNpuPresentBinarySensorAvailability:
         sensor = NpuPresentBinarySensor(mock_coordinator)
         assert sensor.available is True
         assert sensor.is_on is False
+
+
+class TestBinarySensorDeviceGrouping:
+    """Binary sensors live on the sub-device that owns them."""
+
+    def test_smartd_alert_device(self, mock_coordinator):
+        from custom_components.framework_powerd.binary_sensor import SmartdAlertBinarySensor
+
+        info = SmartdAlertBinarySensor(mock_coordinator).device_info
+        assert info["name"] == "SMART"
+        assert info["model"] == "SMART monitor"
+        assert ("framework_powerd", "localhost:8080:smartd") in info["identifiers"]
+        assert info["via_device"] == ("framework_powerd", "localhost:8080")
+
+    def test_storage_health_device(self, mock_coordinator):
+        from custom_components.framework_powerd.binary_sensor import StorageHealthBinarySensor
+
+        sensor = StorageHealthBinarySensor(mock_coordinator)
+        assert sensor._attr_name == "Health"
+        assert sensor.device_info["name"] == "Storage"
+        assert sensor.device_info["model"] == "NVMe monitor"
+        assert ("framework_powerd", "localhost:8080:storage") in sensor.device_info["identifiers"]
+
+    def test_npu_present_device(self, mock_coordinator):
+        from custom_components.framework_powerd.binary_sensor import NpuPresentBinarySensor
+
+        sensor = NpuPresentBinarySensor(mock_coordinator)
+        assert sensor._attr_name == "Present"
+        assert sensor.device_info["name"] == "NPU"
+        assert sensor.device_info["model"] == "AMD XDNA NPU"
+        assert ("framework_powerd", "localhost:8080:npu") in sensor.device_info["identifiers"]

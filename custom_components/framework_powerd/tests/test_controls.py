@@ -179,3 +179,42 @@ class TestFanModeSelect:
 
         mock_coordinator.last_update_success = False
         assert FrameworkPowerFanModeSelect(mock_coordinator).available is False
+
+
+class TestControlDeviceGrouping:
+    """Selects are grouped on their component device."""
+
+    def test_tunable_mode_stays_on_daemon(self, mock_coordinator):
+        from custom_components.framework_powerd.select import (
+            FrameworkPowerTunableModeSelect,
+        )
+
+        entity = FrameworkPowerTunableModeSelect(mock_coordinator)
+        info = entity.device_info
+        assert entity._attr_name == "Power Tunable Mode"
+        assert info["name"] == "Framework Power Daemon"
+        assert "via_device" not in info
+
+    def test_npu_power_mode_device(self, mock_coordinator):
+        from custom_components.framework_powerd.select import (
+            FrameworkPowerNpuPowerModeSelect,
+        )
+
+        entity = FrameworkPowerNpuPowerModeSelect(mock_coordinator)
+        info = entity.device_info
+        assert entity._attr_name == "Power Mode"
+        assert info["name"] == "NPU"
+        assert ("framework_powerd", "localhost:8080:npu") in info["identifiers"]
+        assert info["via_device"] == ("framework_powerd", "localhost:8080")
+
+    def test_fan_mode_device(self, mock_coordinator):
+        from custom_components.framework_powerd.select import (
+            FrameworkPowerFanModeSelect,
+        )
+
+        entity = FrameworkPowerFanModeSelect(mock_coordinator)
+        info = entity.device_info
+        assert entity._attr_name == "Mode"
+        assert info["name"] == "Fan"
+        assert ("framework_powerd", "localhost:8080:fan") in info["identifiers"]
+        assert info["via_device"] == ("framework_powerd", "localhost:8080")

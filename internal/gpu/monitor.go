@@ -19,6 +19,7 @@ type Monitor struct {
 	mu           sync.RWMutex
 	devicePath   string
 	hwmonPath    string
+	cpuHwmonPath string
 	pollInterval time.Duration
 	stats        Stats
 	cpuStats     CPUStats
@@ -46,6 +47,7 @@ func NewMonitor(cfg config.GPUConfig) (*Monitor, error) {
 	return &Monitor{
 		devicePath:   devicePath,
 		hwmonPath:    hwmonPath,
+		cpuHwmonPath: findHwmonByName("/sys/class/hwmon", "k10temp"),
 		pollInterval: pollInterval,
 		stats:        Stats{},
 	}, nil
@@ -95,6 +97,26 @@ func findHwmonPath(devicePath string) (string, error) {
 	}
 
 	return "", errors.New("hwmon not found")
+}
+
+// findHwmonByName returns the hwmon class directory whose name attribute
+// matches, for example k10temp. Empty when it is not present.
+func findHwmonByName(baseDir, name string) string {
+	entries, err := os.ReadDir(baseDir)
+	if err != nil {
+		return ""
+	}
+	for _, e := range entries {
+		dir := filepath.Join(baseDir, e.Name())
+		data, err := os.ReadFile(filepath.Join(dir, "name"))
+		if err != nil {
+			continue
+		}
+		if strings.TrimSpace(string(data)) == name {
+			return dir
+		}
+	}
+	return ""
 }
 
 func (m *Monitor) Start(ctx context.Context) error {
@@ -153,6 +175,9 @@ func (m *Monitor) updateStats() error {
 		m.stats.TemperatureC = m.readTemperature()
 		m.stats.PowerWatts = m.readPower()
 	}
+	if m.cpuHwmonPath != "" {
+		m.stats.CPUTemperatureC = m.readCPUTemperature()
+	}
 
 	m.stats.CPUUsagePercent = m.calculateCPUUsageLocked()
 	m.stats.LastUpdate = time.Now()
@@ -167,6 +192,18 @@ func (m *Monitor) readSysfsFile(path string) int64 {
 	}
 	val, _ := strconv.ParseInt(strings.TrimSpace(string(data)), 10, 64)
 	return val
+}
+
+// readCPUTemperature returns the CPU die temperature from k10temp.
+func (m *Monitor) readCPUTemperature() int {
+	if m.cpuHwmonPath == "" {
+		return 0
+	}
+	entries, err := os.ReadDir(m.cpuHwmonPath)
+	if err != nil {
+		return 0
+	}
+	return parseTemperatureFromEntries(entries, m.cpuHwmonPath)
 }
 
 func (m *Monitor) readTemperature() int {

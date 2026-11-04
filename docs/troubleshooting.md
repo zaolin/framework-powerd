@@ -38,11 +38,11 @@ sudo pacman -S power-profiles-daemon
 - The daemon needs read access to `/dev/input/event*` and `/dev/input/js*`.
   Running as root (as in the unit) is the simplest fix.
 - If running as a normal user, add the user to the `input` group and re-login.
-- Moving a mouse during startup is ignored for the initial scan? No — activity
-  is timestamped from daemon start. Wait for `server.idle_timeout`.
-- Check `seconds_until_idle` in `/status`. A stuck value close to the timeout
-  means input events are still arriving (for example a drifting joystick).
-  The built-in deadzone filters small axis noise.
+- The timer starts when the daemon starts. Wait for `server.idle_timeout`
+  before expecting the idle state.
+- Check `seconds_until_idle` in `/status`. A value that never approaches zero
+  means input events are still arriving (for example a drifting joystick). The
+  built-in deadzone filters small axis noise.
 
 ## A game stays paused after stopping the daemon
 
@@ -146,7 +146,7 @@ from warning to critical notifies immediately.
 - The integration creates a persistent notification and calls `notify_service`
   when set.
 - In Home Assistant, verify the service exists under Developer Tools → Actions
-  and use the full name, e.g. `notify.mobile_app_pixel_11_pro`.
+  and use its full name, e.g. `notify.mobile_app_phone`.
 - The Storage Health binary sensor is on when any SMART alert or NVMe device is
   warning/critical. You can build your own automation from it.
 - Check Home Assistant logs for `Could not call notify.*`.
@@ -155,20 +155,20 @@ from warning to critical notifies immediately.
 
 Check the entity registry override:
 
-**Settings → Devices & Services → Entities → search “GPU GTT Used” → gear →
-Unit of measurement** — clear the old `MiB` override or select `GiB`. Repeat for
-`GPU GTT Total` and `GPU GTT Free`. The integration code already reports GiB.
+**Settings → Devices & Services → Entities → search “GTT Used” → gear → Unit
+of measurement** — clear the old `MiB` override or select `GiB`. Repeat for
+`GTT Total` and `GTT Free`. The integration already reports GiB.
 
-## Daemon Health is degraded / NVMe Status is not ok
+## Daemon Health is degraded / Storage Status is not ok
 
 - `Daemon Health` mirrors `/healthz`. Its attributes show turbostat, NVMe and
   metrics persistence state.
-- `NVMe Status` is `error` when the last poll failed; check `last_error`.
-  Common causes: `nvme`/`smartctl` missing, no access to `/dev/nvme*`, or the
-  device is not visible inside a container.
-- `NVMe Status` is `no_devices` when polling works but no controllers were
-  discovered.
-- `NVMe Status` is `disabled` when `nvme.enabled` is false or no tool exists.
+- `Storage Status` (on the Storage device) is `error` when the last poll
+  failed; check `last_error`. Common causes: `nvme`/`smartctl` missing, no
+  access to `/dev/nvme*`, or the device is not visible inside a container.
+- It is `no_devices` when polling works but no controllers were discovered.
+- It is `disabled` only when `nvme.enabled` is false. A missing `nvme` and
+  `smartctl` pair reports `error` with `last_error` set.
 - The per-device NVMe sensors are only created when at least one device is
   discovered.
 
@@ -216,8 +216,9 @@ is produced in validation mode and is not the reason a start fails.
 
 ## API returns 429
 
-`/mode` and `/activity` are limited to 1 request/second with a burst of 5 per
-client IP. Wait and retry. This is intentional protection for the control plane.
+`/mode`, `/activity`, `/npu/power-mode` and `/fan/mode` are limited to
+1 request/second with a burst of 5 per client IP. Wait and retry. This is
+intentional protection for the control plane.
 
 ## Debug logging
 

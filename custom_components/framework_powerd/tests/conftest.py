@@ -99,7 +99,7 @@ def mock_coordinator():
         },
         "health": {
             "status": "ok",
-            "version": "1.6.0",
+            "version": "1.9.0",
             "uptime_seconds": 1234.0,
             "is_idle": False,
             "power_sample_age_seconds": 1.0,
@@ -125,7 +125,7 @@ def mock_coordinator():
             "cpu_model": "AMD Ryzen AI 7 350 w/ Radeon 860M",
             "cpu_count": 16,
             "total_ram_bytes": 48838284 * 1024,
-            "daemon_version": "1.6.0",
+            "daemon_version": "1.9.0",
         },
         "llm": {
             "enabled": True,
@@ -224,6 +224,7 @@ def mock_coordinator():
             "gtt_free_bytes": 25001775104 - 1143558144,
             "gtt_used_percent": 1143558144 / 25001775104 * 100,
             "cpu_usage_percent": 0.6,
+            "cpu_temperature_celsius": 51,
             "temperature_celsius": 49,
             "power_watts": 9.0,
         },

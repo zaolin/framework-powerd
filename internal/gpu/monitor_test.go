@@ -1,8 +1,10 @@
 package gpu
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -278,5 +280,65 @@ func TestDeriveUsage(t *testing.T) {
 				t.Errorf("percent = %v, want %v", percent, tc.wantPercent)
 			}
 		})
+	}
+}
+
+func TestFindHwmonByName(t *testing.T) {
+	root := t.TempDir()
+	cpu := filepath.Join(root, "hwmon0")
+	if err := os.MkdirAll(cpu, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(cpu, "name"), []byte("k10temp\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	other := filepath.Join(root, "hwmon1")
+	if err := os.MkdirAll(other, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(other, "name"), []byte("amdgpu\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if got := findHwmonByName(root, "k10temp"); got != cpu {
+		t.Errorf("findHwmonByName = %q, want %q", got, cpu)
+	}
+	if got := findHwmonByName(root, "missing"); got != "" {
+		t.Errorf("findHwmonByName(missing) = %q, want empty", got)
+	}
+}
+
+func TestReadCPUTemperature(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "temp1_input"), []byte("52375\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	m := &Monitor{cpuHwmonPath: dir}
+	if got := m.readCPUTemperature(); got != 52 {
+		t.Errorf("cpu temperature = %d, want 52", got)
+	}
+
+	empty := &Monitor{}
+	if got := empty.readCPUTemperature(); got != 0 {
+		t.Errorf("missing hwmon = %d, want 0", got)
+	}
+}
+
+func TestCPUTemperatureJSONOmittedWhenUnavailable(t *testing.T) {
+	data, err := json.Marshal(Stats{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(data), "cpu_temperature_celsius") {
+		t.Errorf("unavailable CPU temperature must be omitted, got %s", data)
+	}
+
+	data, err = json.Marshal(Stats{CPUTemperatureC: 51})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), `"cpu_temperature_celsius":51`) {
+		t.Errorf("CPU temperature missing from %s", data)
 	}
 }

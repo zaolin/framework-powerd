@@ -4,6 +4,29 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 semantic versioning.
 
+## [1.9.0] - 2026-11-04
+
+### Changed
+
+- Home Assistant entities are grouped into sub-devices: GPU, NPU, Fan, LLM,
+  one device per NVMe drive, Storage and SMART, all nested under the daemon
+  device. Entity names drop their component prefix, which the device name now
+  supplies.
+- Entity categories are consistent: every temperature is a normal sensor,
+  while capacities, wear counters and system information are diagnostic.
+
+### Added
+
+- CPU Temperature on the daemon device. The CPU die temperature comes from
+  k10temp and was previously only visible in the fan stats and the diagnostics
+  download. The existing CPU Usage sensor is unchanged.
+
+### Documentation
+
+- README now orients and links out; configuration, API, Home Assistant,
+  architecture and troubleshooting are the single sources of truth. Examples
+  and entity IDs were brought in line with 1.9.0.
+
 ## [1.8.1] - 2026-11-02
 
 ### Fixed
