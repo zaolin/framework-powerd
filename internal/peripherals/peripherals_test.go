@@ -308,16 +308,148 @@ func TestDetectWiFi_USBAdapter(t *testing.T) {
 // TestDetectFan_HardcodedMaxRPM verifies that detectFan sets the max RPM
 // to 6000 (hardcoded), not to the dynamic fan1_target value.
 func TestDetectFan_HardcodedMaxRPM(t *testing.T) {
+	root := t.TempDir()
+	hwmon := filepath.Join(root, "hwmon0")
+	if err := os.MkdirAll(hwmon, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(hwmon, "fan1_input"), []byte("1200\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(hwmon, "name"), []byte("cros_ec\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// A dynamic target must not replace the hardcoded maximum.
+	if err := os.WriteFile(filepath.Join(hwmon, "fan1_target"), []byte("1148\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
 	e := &PeripheralEstimator{
 		fanIdleRPM:   2000,
 		fanIdleWatts: 0.5,
 		fanMaxWatts:  5.0,
+		hwmonBase:    root,
 	}
 	e.detectFan()
 
 	// fanTargetRPM should be 6000 (hardcoded), not the dynamic fan1_target
 	if e.fanTargetRPM != 6000 {
 		t.Errorf("fanTargetRPM = %d, want 6000 (hardcoded)", e.fanTargetRPM)
+	}
+	if e.fanHwmonName != "cros_ec" {
+		t.Errorf("fanHwmonName = %q, want cros_ec", e.fanHwmonName)
+	}
+	if want := filepath.Join(hwmon, "fan1_input"); e.fanPath != want {
+		t.Errorf("fanPath = %q, want %q", e.fanPath, want)
+	}
+}
+
+func TestHwmonDir(t *testing.T) {
+	e := &PeripheralEstimator{}
+	if got := e.hwmonDir(); got != defaultHwmonBase {
+		t.Errorf("hwmonDir() = %q, want %q", got, defaultHwmonBase)
+	}
+
+	e.hwmonBase = "/tmp/fake-hwmon"
+	if got := e.hwmonDir(); got != e.hwmonBase {
+		t.Errorf("hwmonDir() = %q, want %q", got, e.hwmonBase)
+	}
+}
+
+func TestDetectFan_NoFan(t *testing.T) {
+	e := &PeripheralEstimator{hwmonBase: t.TempDir()}
+	e.detectFan()
+	if e.fanTargetRPM != 0 {
+		t.Errorf("fanTargetRPM = %d, want 0 when no fan exists", e.fanTargetRPM)
+	}
+	if e.fanPath != "" {
+		t.Errorf("fanPath = %q, want empty", e.fanPath)
+	}
+	if e.fanHwmonName != "" {
+		t.Errorf("fanHwmonName = %q, want empty", e.fanHwmonName)
+	}
+}
+
+func TestDetectFan_SkipsUnreadableInput(t *testing.T) {
+	root := t.TempDir()
+	// A directory named fan1_input makes os.ReadFile fail with EISDIR.
+	if err := os.MkdirAll(filepath.Join(root, "hwmon0", "fan1_input"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	hwmon := filepath.Join(root, "hwmon1")
+	if err := os.MkdirAll(hwmon, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(hwmon, "fan1_input"), []byte("1200\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(hwmon, "name"), []byte("cros_ec\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// A second readable fan must not replace the first match.
+	second := filepath.Join(root, "hwmon2")
+	if err := os.MkdirAll(second, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(second, "fan1_input"), []byte("900\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(second, "name"), []byte("amdgpu\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	e := &PeripheralEstimator{hwmonBase: root}
+	e.detectFan()
+
+	if want := filepath.Join(hwmon, "fan1_input"); e.fanPath != want {
+		t.Errorf("fanPath = %q, want first readable %q", e.fanPath, want)
+	}
+	if e.fanTargetRPM != 6000 {
+		t.Errorf("fanTargetRPM = %d, want 6000", e.fanTargetRPM)
+	}
+}
+
+func TestDetectFan_AllUnreadable(t *testing.T) {
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "hwmon0", "fan1_input"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	e := &PeripheralEstimator{hwmonBase: root}
+	e.detectFan()
+
+	if e.fanTargetRPM != 0 {
+		t.Errorf("fanTargetRPM = %d, want 0 when no input is readable", e.fanTargetRPM)
+	}
+	if e.fanPath != "" {
+		t.Errorf("fanPath = %q, want empty", e.fanPath)
+	}
+	if e.fanHwmonName != "" {
+		t.Errorf("fanHwmonName = %q, want empty", e.fanHwmonName)
+	}
+}
+
+func TestDetectFan_MissingName(t *testing.T) {
+	root := t.TempDir()
+	hwmon := filepath.Join(root, "hwmon0")
+	if err := os.MkdirAll(hwmon, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(hwmon, "fan1_input"), []byte("1200\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	e := &PeripheralEstimator{hwmonBase: root}
+	e.detectFan()
+
+	if want := filepath.Join(hwmon, "fan1_input"); e.fanPath != want {
+		t.Errorf("fanPath = %q, want %q", e.fanPath, want)
+	}
+	if e.fanTargetRPM != 6000 {
+		t.Errorf("fanTargetRPM = %d, want 6000", e.fanTargetRPM)
+	}
+	if e.fanHwmonName != "" {
+		t.Errorf("fanHwmonName = %q, want empty", e.fanHwmonName)
 	}
 }
 

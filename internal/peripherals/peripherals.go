@@ -26,6 +26,7 @@ type PeripheralEstimator struct {
 	fanIdleWatts float64
 	fanMaxWatts  float64
 	fanHwmonName string
+	hwmonBase    string // override for tests; empty means /sys/class/hwmon
 	wifiIdle     float64
 	wifiActive   float64
 	wifiPresent  bool
@@ -57,6 +58,7 @@ var nvmePowerTable = map[string]struct{ idle, active float64 }{
 
 const defaultNVMeIdle = 0.05
 const defaultNVMeActive = 7.0
+const defaultHwmonBase = "/sys/class/hwmon"
 const defaultFanIdleRPM = 2000
 const defaultFanIdleWatts = 0.5
 const defaultFanMaxWatts = 5.0
@@ -214,11 +216,19 @@ func (e *PeripheralEstimator) detectNVMe() {
 	}
 }
 
+// hwmonDir returns the hwmon class root, honoring the test override.
+func (e *PeripheralEstimator) hwmonDir() string {
+	if e.hwmonBase != "" {
+		return e.hwmonBase
+	}
+	return defaultHwmonBase
+}
+
 // detectFan finds the first hwmon fan input and reads the hwmon name.
 // Max RPM is hardcoded to 6000 (Framework Desktop fan max) because
 // fan1_target is the current target (changes dynamically), not the max.
 func (e *PeripheralEstimator) detectFan() {
-	matches, _ := filepath.Glob("/sys/class/hwmon/*/fan*_input")
+	matches, _ := filepath.Glob(filepath.Join(e.hwmonDir(), "*", "fan*_input"))
 	for _, fanPath := range matches {
 		// Verify the file is readable
 		if _, err := os.ReadFile(fanPath); err != nil {
