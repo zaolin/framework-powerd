@@ -1,5 +1,6 @@
 """Tests to verify Python files have valid syntax and structure."""
 import ast
+import json
 import os
 import sys
 
@@ -96,3 +97,13 @@ def test_button_syntax():
     path = os.path.join(os.path.dirname(__file__), '..', 'button.py')
     with open(path, 'r') as f:
         ast.parse(f.read())
+
+
+def test_manifest_key_order():
+    """Manifest keys must satisfy hassfest ordering: domain, name, then A-Z."""
+    path = os.path.join(os.path.dirname(__file__), '..', 'manifest.json')
+    with open(path, 'r') as f:
+        manifest = json.load(f)
+    keys = list(manifest)
+    assert keys[:2] == ["domain", "name"]
+    assert keys[2:] == sorted(keys[2:])

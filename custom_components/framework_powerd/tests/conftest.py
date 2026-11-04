@@ -1,10 +1,11 @@
 """Pytest configuration for Framework Power Daemon tests."""
 
 import sys
-import os
+from pathlib import Path
 
-# Add parent directory to path for imports
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+# Add the repository root so tests can import custom_components.* even when
+# pytest is launched through its console script.
+sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 import pytest
 from unittest.mock import MagicMock
