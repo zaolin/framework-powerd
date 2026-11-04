@@ -32,7 +32,7 @@ curl http://localhost:8080/healthz
 ```json
 {
   "status": "ok",
-  "version": "1.9.0",
+  "version": "1.9.1",
   "uptime_seconds": 12345.6,
   "is_idle": false,
   "power_sample_age_seconds": 1.2,
@@ -158,7 +158,7 @@ Full daemon state. Requires auth.
     "cpu_model": "AMD Ryzen AI 7 350 w/ Radeon 860M",
     "cpu_count": 16,
     "total_ram_bytes": 50010562560,
-    "daemon_version": "1.9.0"
+    "daemon_version": "1.9.1"
   }
 }
 ```

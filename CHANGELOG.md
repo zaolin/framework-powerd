@@ -4,6 +4,19 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 semantic versioning.
 
+## [1.9.1] - 2026-11-04
+
+### Fixed
+
+- GitHub Actions can collect the Home Assistant tests again. The CI pytest
+  console script did not have the repository root on `sys.path`, so
+  `test_diagnostics` failed to import `custom_components`.
+- The fan detection test no longer reads the host's `/sys/class/hwmon`. It uses
+  a temporary hwmon tree, so CI runners without a fan exercise the same paths
+  as the Framework Desktop.
+- HACS validation passes: the integration manifest has an `issue_tracker`, the
+  keys follow hassfest order, and the repository has topics.
+
 ## [1.9.0] - 2026-11-04
 
 ### Changed
