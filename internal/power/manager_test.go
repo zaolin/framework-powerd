@@ -367,8 +367,8 @@ func TestGetStatus_ModeReporting(t *testing.T) {
 
 	pm := NewPowerManager()
 	status := pm.GetStatus()
-	if status.Mode != "" || status.TunableMode != "" {
-		t.Errorf("initial mode = %q/%q, want empty/empty", status.Mode, status.TunableMode)
+	if status.Mode != "balanced" || status.TunableMode != "" {
+		t.Errorf("initial mode = %q/%q, want balanced/empty", status.Mode, status.TunableMode)
 	}
 
 	if err := pm.SetPerformance("test"); err != nil {
@@ -391,5 +391,55 @@ func TestGetStatus_ModeReporting(t *testing.T) {
 	}
 	if status.TunableMode != "powersave" {
 		t.Errorf("tunable_mode = %q, want powersave", status.TunableMode)
+	}
+}
+
+func TestRealExecRunnerTimeout(t *testing.T) {
+	orig := commandTimeout
+	commandTimeout = 50 * time.Millisecond
+	t.Cleanup(func() { commandTimeout = orig })
+
+	err := (realExecRunner{}).Run("sleep", "5")
+	if err == nil {
+		t.Fatal("Run() error = nil, want timeout")
+	}
+	if !strings.Contains(err.Error(), "timed out") {
+		t.Errorf("Run() error = %q, want a timeout", err)
+	}
+}
+
+func TestDisableNetworkPowerSaveUsesCommandRunner(t *testing.T) {
+	orig := CommandRunner()
+	t.Cleanup(func() { SetCommandRunner(orig) })
+	runner := &fakeRunner{available: map[string]bool{"iw": true}}
+	SetCommandRunner(runner)
+
+	root := t.TempDir()
+	lo := filepath.Join(root, "lo")
+	if err := os.MkdirAll(lo, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	iface := filepath.Join(root, "wlan0")
+	controlDir := filepath.Join(iface, "device", "power")
+	if err := os.MkdirAll(controlDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	control := filepath.Join(controlDir, "control")
+	if err := os.WriteFile(control, []byte("auto"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	pm := NewPowerManager()
+	pm.disableNetworkPowerSave(root)
+
+	if !contains(runner.calls, "iw dev wlan0 set power_save off") {
+		t.Errorf("iw was not routed through the command runner: %v", runner.calls)
+	}
+	data, err := os.ReadFile(control)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != "on" {
+		t.Errorf("power/control = %q, want on", data)
 	}
 }

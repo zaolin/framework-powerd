@@ -85,12 +85,39 @@ kill -CONT <pid>
 - A corrupt state file is logged and ignored; the daemon starts with a fresh
   buffer. The next save overwrites it.
 
+## framework-powerd is not started after boot
+
+If the journal shows an ordering cycle like:
+
+```text
+multi-user.target: Found ordering cycle: framework-powerd.service/start after
+power-profiles-daemon.service/start
+multi-user.target: Job framework-powerd.service/start deleted to break ordering cycle
+```
+
+the unit is ordered after `power-profiles-daemon.service`. PPD is itself ordered
+after `multi-user.target`, while a unit wanted by `multi-user.target` is ordered
+before it, so the two orderings form a cycle.
+
+Update to the current unit from `configs/systemd/framework-powerd.service`. It
+keeps `Wants=power-profiles-daemon.service` but does not use
+`After=power-profiles-daemon.service`; the daemon applies its initial state
+just after `READY=1` and retries while PPD starts. Do not add the `After=` line
+back. After replacing the unit, reload systemd and restart the service:
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl restart framework-powerd
+```
+
 ## systemd restarts the service repeatedly
 
 - Check `journalctl -u framework-powerd`.
-- The unit uses `Type=notify` and `WatchdogSec=30s`. If startup takes longer than
-  30 seconds, systemd kills it before `READY=1`. Investigate slow
-  `powerprofilesctl` or `scxctl` calls.
+- The unit uses `Type=notify`. If startup takes longer than `TimeoutStartSec`
+  (90 seconds by default), systemd kills it before `READY=1`. Check slow
+  configuration, monitor initialization and listener binding; the initial
+  power profile runs after `READY=1` and does not count against this timeout.
+  `WatchdogSec=30s` only starts after `READY=1`.
 - `RestartSec=5s` and `StartLimitBurst=5` prevent tight restart loops; after the
   limit, systemd stops trying. Fix the underlying error and run
   `systemctl reset-failed framework-powerd`.

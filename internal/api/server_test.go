@@ -121,6 +121,9 @@ func TestHandleMode_Performance(t *testing.T) {
 	if resp["mode"] != "balanced" {
 		t.Errorf("Expected mode 'balanced', got '%s'", resp["mode"])
 	}
+	if got := pm.CurrentTunableState(); got != "performance" {
+		t.Errorf("tunable mode = %q, want performance", got)
+	}
 }
 
 func TestHandleMode_Powersave(t *testing.T) {
@@ -149,6 +152,9 @@ func TestHandleMode_Powersave(t *testing.T) {
 
 	if resp["mode"] != "balanced" {
 		t.Errorf("Expected mode 'balanced', got '%s'", resp["mode"])
+	}
+	if got := pm.CurrentTunableState(); got != "powersave" {
+		t.Errorf("tunable mode = %q, want powersave", got)
 	}
 }
 
@@ -187,8 +193,8 @@ func TestHandleMode_PowerProfilectlFails(t *testing.T) {
 
 	// currentMode must NOT have been committed on failure. With the balanced
 	// pinning, an uncommitted mode reports "" (not "balanced").
-	if got := pm.GetCurrentMode(); got == "balanced" {
-		t.Errorf("mode must not advance to 'balanced' when the primary command failed, got %q", got)
+	if got := pm.CurrentTunableState(); got != "" {
+		t.Errorf("tunable mode must stay empty when the primary command failed, got %q", got)
 	}
 }
 

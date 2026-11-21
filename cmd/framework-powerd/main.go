@@ -35,6 +35,20 @@ import (
 // version is injected at build time via -ldflags "-X main.version=...".
 var version = "dev"
 
+// initialProfileBackoff delays the retries that apply the initial balanced
+// profile. power-profiles-daemon is ordered after multi-user.target, so it can
+// still be starting when this service becomes ready. The total wait is 58 s.
+var initialProfileBackoff = []time.Duration{
+	time.Second,
+	2 * time.Second,
+	5 * time.Second,
+	10 * time.Second,
+	10 * time.Second,
+	10 * time.Second,
+	10 * time.Second,
+	10 * time.Second,
+}
+
 var CLI struct {
 	Version kong.VersionFlag `name:"version" help:"Print version and exit"`
 
@@ -162,11 +176,7 @@ func runServer() {
 		log.Fatalf("Dependencies missing: %v", err)
 	}
 
-	// Initial Default State
 	log.Printf("Starting Framework Power Daemon %s...", version)
-	if err := pm.SetDefaultActive(); err != nil {
-		log.Printf("Initial detection failed: %v\n", err)
-	}
 
 	// Components
 	pauser := power.NewProcessPauser()
@@ -191,11 +201,13 @@ func runServer() {
 	// must not interleave SetPerformance/SetPowersave or pause/resume.
 	var reconcileMu sync.Mutex
 
-	// Logic handler
-	updatePowerState := func() {
+	// Logic handler. It returns the error from the profile switch so the
+	// post-READY initializer can retry while PPD becomes available.
+	updatePowerState := func() error {
 		reconcileMu.Lock()
 		defer reconcileMu.Unlock()
 
+		var applyErr error
 		st := state.snapshot()
 		d := decidePowerMode(st, pauser.IsPaused())
 
@@ -210,6 +222,7 @@ func runServer() {
 
 			if err := pm.SetPowersave("System Idle"); err != nil {
 				log.Printf("Failed to set powersave: %v\n", err)
+				applyErr = err
 			}
 		} else {
 			if d.shouldResume {
@@ -222,17 +235,20 @@ func runServer() {
 				log.Println("[PowerLogic] Active Usage (Game/Remote). Force Performance.")
 				if err := pm.SetPerformance("Game/Remote Active"); err != nil {
 					log.Printf("Failed to set performance: %v\n", err)
+					applyErr = err
 				}
 			} else if d.shouldDefault {
 				log.Println("[PowerLogic] Active Usage (Desktop). Set Default Active.")
 				if err := pm.SetDefaultActive(); err != nil {
 					log.Printf("Failed to set default active: %v\n", err)
+					applyErr = err
 				}
 			}
 		}
 
 		// Update Status within (potentially) new state
 		pm.SetState(st.isIdle, st.isRemotePlay, st.isGameRunning, st.gamePID, pauser.IsPaused())
+		return applyErr
 	}
 
 	// Start Idle Monitor (Raw Input)
@@ -587,6 +603,45 @@ func runServer() {
 		}()
 	}
 
+	// Apply the initial state only after READY=1. power-profiles-daemon is
+	// ordered after multi-user.target, so calling powerprofilesctl earlier can
+	// block the target that is waiting for this service. Each retry runs the
+	// normal reconciler, which re-evaluates idle/activity state and holds
+	// reconcileMu for that call but not while the retry sleeps. Any transition
+	// or API mode change sets a tunable mode, which stops the retries.
+	initialStateDone := make(chan struct{})
+	go func() {
+		defer close(initialStateDone)
+		applied, err := applyInitialState(
+			updatePowerState,
+			func() bool { return pm.CurrentTunableState() != "" },
+			func() bool {
+				select {
+				case <-shutdownStarted:
+					return true
+				default:
+					return false
+				}
+			},
+			func(d time.Duration) bool {
+				timer := time.NewTimer(d)
+				defer timer.Stop()
+				select {
+				case <-timer.C:
+					return true
+				case <-shutdownStarted:
+					return false
+				}
+			},
+		)
+		switch {
+		case err != nil:
+			log.Printf("Initial power state could not be applied: %v", err)
+		case applied:
+			log.Println("Initial power state applied")
+		}
+	}()
+
 	stop := make(chan os.Signal, 1)
 	signal.Notify(stop, syscall.SIGINT, syscall.SIGTERM)
 
@@ -599,6 +654,10 @@ func runServer() {
 
 	close(shutdownStarted)
 	_, _ = daemon.SdNotify(false, daemon.SdNotifyStopping)
+
+	// The initial-state retry can be inside updatePowerState. Let it leave
+	// before tearing anything down or resuming a paused game.
+	<-initialStateDone
 
 	// Hand the fan back to the EC before anything else, so a stuck daemon can
 	// never leave a manual duty behind.
@@ -695,6 +754,35 @@ type powerDecision struct {
 	shouldResume  bool
 	shouldPerf    bool
 	shouldDefault bool
+}
+
+// applyInitialState retries apply until it succeeds, a state transition sets a
+// tunable mode, the wait function says to stop (shutdown), or the backoff
+// schedule is exhausted. It returns whether the initial state was applied and
+// the last error when it was not.
+func applyInitialState(apply func() error, alreadyApplied func() bool, canceled func() bool, wait func(time.Duration) bool) (bool, error) {
+	var lastErr error
+	for attempt := 0; ; attempt++ {
+		if canceled() {
+			return false, nil
+		}
+		if alreadyApplied() {
+			return true, nil
+		}
+		if err := apply(); err == nil {
+			return true, nil
+		} else {
+			lastErr = err
+			log.Printf("Initial power state not applied (attempt %d): %v", attempt+1, err)
+		}
+
+		if attempt >= len(initialProfileBackoff) {
+			return false, lastErr
+		}
+		if !wait(initialProfileBackoff[attempt]) {
+			return false, nil
+		}
+	}
 }
 
 // decidePowerMode encodes the 4-branch priority table extracted from

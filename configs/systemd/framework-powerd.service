@@ -1,6 +1,10 @@
 [Unit]
 Description=Framework Power Daemon
-After=network.target power-profiles-daemon.service
+After=network.target
+# Do not order this unit after power-profiles-daemon.service. PPD is itself
+# ordered after multi-user.target, while a unit wanted by multi-user.target is
+# ordered before it. Ordering after PPD therefore creates a boot cycle and
+# systemd deletes this service's start job. PPD is D-Bus activated on demand.
 Wants=power-profiles-daemon.service
 StartLimitIntervalSec=60
 StartLimitBurst=5

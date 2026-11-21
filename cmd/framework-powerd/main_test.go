@@ -3,6 +3,8 @@ package main
 import (
 	"fmt"
 	"os"
+	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -262,4 +264,291 @@ func TestApplyCLIOverrides(t *testing.T) {
 	if cfg.Server.JWTSecret != "cli-secret" {
 		t.Errorf("jwt secret = %q, want cli-secret", cfg.Server.JWTSecret)
 	}
+}
+
+var wantInitialProfileBackoff = []time.Duration{
+	time.Second,
+	2 * time.Second,
+	5 * time.Second,
+	10 * time.Second,
+	10 * time.Second,
+	10 * time.Second,
+	10 * time.Second,
+	10 * time.Second,
+}
+
+func TestInitialProfileBackoffSchedule(t *testing.T) {
+	if !slices.Equal(initialProfileBackoff, wantInitialProfileBackoff) {
+		t.Fatalf("initialProfileBackoff = %v, want %v", initialProfileBackoff, wantInitialProfileBackoff)
+	}
+	var total time.Duration
+	for _, d := range initialProfileBackoff {
+		total += d
+	}
+	if total != 58*time.Second {
+		t.Errorf("total backoff = %s, want 58s", total)
+	}
+}
+
+func TestApplyInitialState_SucceedsAfterRetries(t *testing.T) {
+	attempts := 0
+	var waits []time.Duration
+
+	applied, err := applyInitialState(
+		func() error {
+			attempts++
+			if attempts < 3 {
+				return fmt.Errorf("power-profiles-daemon not ready")
+			}
+			return nil
+		},
+		func() bool { return false },
+		func() bool { return false },
+		func(d time.Duration) bool {
+			waits = append(waits, d)
+			return true
+		},
+	)
+
+	if err != nil {
+		t.Fatalf("applyInitialState() error = %v", err)
+	}
+	if !applied {
+		t.Fatal("applyInitialState() applied = false, want true")
+	}
+	if attempts != 3 {
+		t.Errorf("attempts = %d, want 3", attempts)
+	}
+	if !slices.Equal(waits, wantInitialProfileBackoff[:2]) {
+		t.Errorf("waits = %v, want %v", waits, wantInitialProfileBackoff[:2])
+	}
+}
+
+func TestApplyInitialState_StopsWhenAlreadyApplied(t *testing.T) {
+	attempts := 0
+	applied, err := applyInitialState(
+		func() error {
+			attempts++
+			return nil
+		},
+		func() bool { return true },
+		func() bool { return false },
+		func(time.Duration) bool {
+			t.Fatal("wait must not be called when the state is already applied")
+			return false
+		},
+	)
+
+	if err != nil || !applied {
+		t.Fatalf("applyInitialState() = (%v, %v), want (true, nil)", applied, err)
+	}
+	if attempts != 0 {
+		t.Errorf("attempts = %d, want 0", attempts)
+	}
+}
+
+func TestApplyInitialState_StopsWhenAppliedDuringRetry(t *testing.T) {
+	attempts := 0
+	checks := 0
+	calls := 0
+	applied, err := applyInitialState(
+		func() error {
+			attempts++
+			return fmt.Errorf("power-profiles-daemon not ready")
+		},
+		func() bool {
+			checks++
+			return checks > 1
+		},
+		func() bool { return false },
+		func(time.Duration) bool {
+			calls++
+			return true
+		},
+	)
+
+	if err != nil || !applied {
+		t.Fatalf("applyInitialState() = (%v, %v), want (true, nil)", applied, err)
+	}
+	if attempts != 1 {
+		t.Errorf("attempts = %d, want 1 (a committed mode must stop retries)", attempts)
+	}
+	if checks != 2 {
+		t.Errorf("alreadyApplied calls = %d, want 2", checks)
+	}
+	if calls != 1 {
+		t.Errorf("wait calls = %d, want 1", calls)
+	}
+}
+
+func TestApplyInitialState_StopsBeforeFirstAttemptOnShutdown(t *testing.T) {
+	attempts := 0
+	applied, err := applyInitialState(
+		func() error {
+			attempts++
+			return nil
+		},
+		func() bool { return false },
+		func() bool { return true },
+		func(time.Duration) bool {
+			t.Fatal("wait must not be called after shutdown")
+			return false
+		},
+	)
+
+	if err != nil || applied {
+		t.Fatalf("applyInitialState() = (%v, %v), want (false, nil)", applied, err)
+	}
+	if attempts != 0 {
+		t.Errorf("attempts = %d, want 0", attempts)
+	}
+}
+
+func TestApplyInitialState_ExhaustsRetries(t *testing.T) {
+	attempts := 0
+	var waits []time.Duration
+	applied, err := applyInitialState(
+		func() error {
+			attempts++
+			return fmt.Errorf("attempt %d", attempts)
+		},
+		func() bool { return false },
+		func() bool { return false },
+		func(d time.Duration) bool {
+			waits = append(waits, d)
+			return true
+		},
+	)
+
+	if err == nil {
+		t.Fatal("applyInitialState() error = nil, want the last failure")
+	}
+	if err.Error() != "attempt 9" {
+		t.Errorf("error = %q, want the last attempt", err)
+	}
+	if applied {
+		t.Fatal("applyInitialState() applied = true, want false")
+	}
+	if attempts != 9 {
+		t.Errorf("attempts = %d, want 9", attempts)
+	}
+	if !slices.Equal(waits, wantInitialProfileBackoff) {
+		t.Errorf("waits = %v, want %v", waits, wantInitialProfileBackoff)
+	}
+}
+
+func TestApplyInitialState_StopsWhenWaitIsInterrupted(t *testing.T) {
+	attempts := 0
+	calls := 0
+	applied, err := applyInitialState(
+		func() error {
+			attempts++
+			return fmt.Errorf("power-profiles-daemon not ready")
+		},
+		func() bool { return false },
+		func() bool { return false },
+		func(time.Duration) bool {
+			calls++
+			return calls < 3
+		},
+	)
+
+	if err != nil {
+		t.Errorf("applyInitialState() error = %v, want nil after shutdown", err)
+	}
+	if applied {
+		t.Error("applyInitialState() applied = true, want false")
+	}
+	if attempts != 3 {
+		t.Errorf("attempts = %d, want 3", attempts)
+	}
+	if calls != 3 {
+		t.Errorf("wait calls = %d, want 3", calls)
+	}
+}
+
+func systemdDirectives(data []byte) map[string][]string {
+	// Join continuation lines before splitting, so a wrapped directive cannot
+	// hide a dependency from the test.
+	text := strings.ReplaceAll(string(data), "\\\n", " ")
+	directives := map[string][]string{}
+	for _, line := range strings.Split(text, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		key, value, ok := strings.Cut(line, "=")
+		if !ok {
+			continue
+		}
+		key = strings.TrimSpace(key)
+		directives[key] = append(directives[key], strings.Fields(value)...)
+	}
+	return directives
+}
+
+func TestSystemdUnitDoesNotOrderAfterPowerProfilesDaemon(t *testing.T) {
+	data, err := os.ReadFile("../../configs/systemd/framework-powerd.service")
+	if err != nil {
+		t.Fatal(err)
+	}
+	directives := systemdDirectives(data)
+
+	for _, unit := range directives["After"] {
+		if unit == "power-profiles-daemon.service" || unit == "power-profiles-daemon" {
+			t.Fatalf("unit must not order after %s", unit)
+		}
+	}
+	if !contains(directives["After"], "network.target") {
+		t.Error("unit must keep After=network.target")
+	}
+	if !contains(directives["Wants"], "power-profiles-daemon.service") {
+		t.Error("unit must still want power-profiles-daemon.service")
+	}
+}
+
+func TestSystemdDirectiveParser(t *testing.T) {
+	tests := []struct {
+		name string
+		unit string
+		key  string
+		want []string
+	}{
+		{
+			name: "continued line",
+			unit: "[Unit]\nAfter=network.target \\\n power-profiles-daemon.service\n",
+			key:  "After",
+			want: []string{"network.target", "power-profiles-daemon.service"},
+		},
+		{
+			name: "whitespace around equals",
+			unit: "[Unit]\nAfter = power-profiles-daemon.service\n",
+			key:  "After",
+			want: []string{"power-profiles-daemon.service"},
+		},
+		{
+			name: "comment is ignored",
+			unit: "[Unit]\n#After=power-profiles-daemon.service\nWants=power-profiles-daemon.service\n",
+			key:  "After",
+			want: nil,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			directives := systemdDirectives([]byte(tt.unit))
+			if !slices.Equal(directives[tt.key], tt.want) {
+				t.Errorf("%s = %v, want %v", tt.key, directives[tt.key], tt.want)
+			}
+		})
+	}
+}
+
+func contains(values []string, want string) bool {
+	for _, value := range values {
+		if value == want {
+			return true
+		}
+	}
+	return false
 }

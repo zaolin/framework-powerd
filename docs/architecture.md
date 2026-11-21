@@ -78,9 +78,11 @@ flowchart TD
     HA -->|"select / button / services"| API
 ```
 
-The `Reconciler` is `updatePowerState` in `cmd/framework-powerd/main.go`. All
-callbacks take a mutex, so idle, remote-play, Steam and API events cannot
-interleave mode changes or pause/resume operations.
+The `Reconciler` is `updatePowerState` in `cmd/framework-powerd/main.go`. Idle,
+remote-play and Steam callbacks take a mutex, so they cannot interleave mode
+changes or pause/resume operations. API mode requests go through the power
+manager's own lock; they are not serialized with a reconciliation, so a manual
+`POST /mode` can land between two state transitions.
 
 The API exposes `/status` (including a `health` block and `tunable_mode`),
 `/healthz`, `/mode`, `/activity`, `/smartd/stats`, `/nvme/stats`, `/llm/stats`,
@@ -163,7 +165,7 @@ the daemon started.
 Startup order:
 
 1. Load and validate config, apply explicit CLI overrides.
-2. Pin the balanced profile and validate external tools.
+2. Validate external tools.
 3. Start the idle, Remote Play and Steam detectors.
 4. Start the power monitor, which restores the metrics ring and starts
    turbostat and the persistence loop; restore persisted SMART alerts.
@@ -173,16 +175,24 @@ Startup order:
    `READY=1` and start watchdog pings. The fan starts only after a successful
    bind, because a failed bind exits via `log.Fatalf` and would otherwise leave
    a manual duty behind.
+7. After `READY=1`, apply the initial state with retries while
+   `power-profiles-daemon` finishes starting. PPD is ordered after
+   `multi-user.target`, so this unit must not wait for it before becoming
+   ready. Each attempt runs the normal reconciler, which re-evaluates the
+   current idle/activity state; the reconciler lock is held for that call,
+   including the profile switch, but not while the retry sleeps. Any committed
+   tunable mode stops the retries.
 
 Shutdown order:
 
 1. Receive `SIGTERM`/`SIGINT`, send systemd `STOPPING=1`.
-2. Stop the fan controller and return the fan to the EC.
-3. Stop the power monitor and flush the final metrics snapshot.
-4. Stop the SMART monitor and flush persisted alerts.
-5. Stop the LLM poller and persistence loop, then flush `llm.json`.
-6. Close the HTTP server with a 5-second grace period.
-7. Resume any paused game process tree before exiting.
+2. Wait for the initial-state retry loop to stop.
+3. Stop the fan controller and return the fan to the EC.
+4. Stop the power monitor and flush the final metrics snapshot.
+5. Stop the SMART monitor and flush persisted alerts.
+6. Stop the LLM poller and persistence loop, then flush `llm.json`.
+7. Close the HTTP server with a 5-second grace period.
+8. Resume any paused game process tree before exiting.
 
 The systemd unit also runs `framework_tool --autofanctrl` as `ExecStopPost`, so
 a crash or watchdog kill returns the fan even when this order cannot run.

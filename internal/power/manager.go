@@ -1,6 +1,7 @@
 package power
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"os"
@@ -114,13 +115,8 @@ func (pm *PowerManager) GetStatus() Status {
 	// internal performance/powersave gate in TunableMode so callers can see
 	// which secondary tunables are active without confusing it with the APU
 	// profile.
-	mode := ""
-	if pm.currentMode != "" {
-		mode = "balanced"
-	}
-
 	return Status{
-		Mode:             mode,
+		Mode:             "balanced",
 		TunableMode:      pm.currentMode,
 		IsIdle:           pm.isIdle,
 		IsRemotePlay:     pm.isRemotePlay,
@@ -284,7 +280,7 @@ func (pm *PowerManager) SetPowersave(reason string) error {
 	pm.enablePowertopTune()
 
 	// 4. Exclude Network Devices (Stability)
-	pm.disableNetworkPowerSave()
+	pm.disableNetworkPowerSave("/sys/class/net")
 
 	return nil
 }
@@ -321,10 +317,11 @@ func (pm *PowerManager) enablePowertopTune() {
 	}
 }
 
-// disableNetworkPowerSave forces 'on' for network devices to prevent connection drops (e.g. mt7925)
-func (pm *PowerManager) disableNetworkPowerSave() {
+// disableNetworkPowerSave forces 'on' for network devices to prevent connection drops (e.g. mt7925).
+// netBase is a parameter so tests can use a temporary sysfs tree.
+func (pm *PowerManager) disableNetworkPowerSave(netBase string) {
 	log.Println("  -> Disabling Power Save for Network Devices...")
-	matches, _ := filepath.Glob("/sys/class/net/*")
+	matches, _ := filepath.Glob(filepath.Join(netBase, "*"))
 	for _, ifacePath := range matches {
 		if filepath.Base(ifacePath) == "lo" {
 			continue
@@ -342,7 +339,7 @@ func (pm *PowerManager) disableNetworkPowerSave() {
 
 		// Use iw for wireless interfaces
 		if commandExists("iw") {
-			if err := exec.Command("iw", "dev", filepath.Base(ifacePath), "set", "power_save", "off").Run(); err != nil {
+			if err := runCommand("iw", "dev", filepath.Base(ifacePath), "set", "power_save", "off"); err != nil {
 				// Expected for ethernet interfaces — only log in debug mode.
 				if pm.Debug {
 					log.Printf("  -> iw power_save off failed for %s: %v\n", filepath.Base(ifacePath), err)
@@ -382,6 +379,11 @@ func (pm *PowerManager) disableLatency() {
 // process table. Production code uses the default (real exec.Command).
 var commandRunner execRunner = realExecRunner{}
 
+// commandTimeout bounds external power tools. A hung powerprofilesctl call
+// must not hold the reconciler forever while the systemd watchdog keeps the
+// daemon looking healthy.
+var commandTimeout = 30 * time.Second
+
 // ExecRunner is the seam exposed for tests in other packages (e.g. api tests).
 type ExecRunner = execRunner
 
@@ -400,9 +402,15 @@ type execRunner interface {
 type realExecRunner struct{}
 
 func (realExecRunner) Run(name string, args ...string) error {
-	cmd := exec.Command(name, args...)
+	ctx, cancel := context.WithTimeout(context.Background(), commandTimeout)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, name, args...)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
+		if ctx.Err() == context.DeadlineExceeded {
+			return fmt.Errorf("command '%s %s' timed out after %s", name, strings.Join(args, " "), commandTimeout)
+		}
 		return fmt.Errorf("command '%s %s' failed: %v, output: %s", name, strings.Join(args, " "), err, strings.TrimSpace(string(output)))
 	}
 	return nil
