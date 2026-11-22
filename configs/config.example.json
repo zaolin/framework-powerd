@@ -45,6 +45,14 @@
     "fall_step_percent": 3,
     "poll_interval": "5s"
   },
+  "led": {
+    "mode": "off",
+    "frame_interval": "250ms"
+  },
+  "network_audit": {
+    "enabled": true,
+    "poll_interval": "30s"
+  },
   "metrics": {
     "persist": true,
     "state_file": "/var/lib/framework-powerd/metrics.json",

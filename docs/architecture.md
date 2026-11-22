@@ -18,6 +18,8 @@ services).
 | `internal/llm` | Caddy access-log tailing, per-IP/group request accounting, energy and cost estimates. |
 | `internal/npu` | AMD XDNA accel telemetry, context table and power-mode ioctl. |
 | `internal/fan` | EC fan sensors, duty curve, hysteresis and `framework_tool` control. |
+| `internal/netaudit` | procfs port inventory, process/systemd/container mapping, firewall rules. |
+| `internal/led` | RGB keyboard modes, rainbow animation and `framework_tool --rgbkbd` writes. |
 | `internal/peripherals` | USB/NVMe/fan/Wi-Fi/Ethernet power estimation. |
 | `internal/api` | HTTP control plane, JWT, rate limiting, `/healthz`. |
 | `internal/config` | JSON configuration and validation. |
@@ -56,6 +58,8 @@ flowchart TD
         LLM["LLM access-log tailer"]
         NPU["NPU accel monitor"]
         Fan["EC fan controller"]
+        Net["Network audit monitor"]
+        LED["RGB keyboard controller"]
     end
 
     Turbo --> PowerMon["Power monitor"]
@@ -73,6 +77,10 @@ flowchart TD
     NPU --> Status
     Fan -->|"fansetduty / autofanctrl"| EC["Embedded controller"]
     Fan --> Status
+    ProcNet[("/proc/net")] --> Net
+    Net --> Status
+    LED -->|"framework_tool --rgbkbd"| Keyboard["Keyboard LEDs"]
+    LED --> Status
     API --> Status
     Status --> HA["Home Assistant integration\n(GPU/NPU/Fan/LLM/NVMe sub-devices)"]
     HA -->|"select / button / services"| API
@@ -86,8 +94,8 @@ manager's own lock; they are not serialized with a reconciliation, so a manual
 
 The API exposes `/status` (including a `health` block and `tunable_mode`),
 `/healthz`, `/mode`, `/activity`, `/smartd/stats`, `/nvme/stats`, `/llm/stats`,
-`/npu/stats` and `/fan/stats`, plus `POST /npu/power-mode` and
-`POST /fan/mode`. The Home Assistant integration polls `/status`, creates
+`/npu/stats`, `/fan/stats`, `/network/stats` and `/led/stats`, plus
+`POST /npu/power-mode`, `POST /fan/mode` and `POST /led/mode`. The Home Assistant integration polls `/status`, creates
 notifications from SMART/NVMe warnings, and can call `/mode`, `/activity`,
 `/npu/power-mode` and `/fan/mode` through its selects, button and services.
 Entities are grouped into sub-devices under the daemon device; see
@@ -134,6 +142,13 @@ Only the secondary tunables (PCIe ASPM, powertop, USB/audio latency) change.
   5 s) and applies the duty curve with hysteresis and a fall step. The daemon
   returns the fan to the EC on graceful shutdown; the systemd `ExecStopPost`
   hook covers crashes and watchdog kills.
+- **LED controller** writes static white/off states on mode changes and rotates
+  the rainbow palette every `led.frame_interval` (default 250 ms). Shutdown turns
+  the LEDs off. Missing `framework_tool` is unsupported, not a daemon failure.
+- **Network audit** inventories listening sockets and local firewall rules every
+  `network_audit.poll_interval` (default 30 s). Socket inodes map to PIDs,
+  systemd units and Docker/Podman containers; firewall backend detection prefers
+  nftables and falls back to iptables or firewalld. It performs no active scan.
 
 ## Energy aggregation
 
@@ -169,10 +184,10 @@ Startup order:
 3. Start the idle, Remote Play and Steam detectors.
 4. Start the power monitor, which restores the metrics ring and starts
    turbostat and the persistence loop; restore persisted SMART alerts.
-5. Start the optional SMART, NVMe, LLM, GPU and NPU monitors. The NPU monitor
-   keeps watching for the device if it is not present yet.
-6. Bind the HTTP listener, then start the fan controller, send systemd
-   `READY=1` and start watchdog pings. The fan starts only after a successful
+5. Start network audit and the optional SMART, NVMe, LLM, GPU and NPU monitors.
+   The NPU monitor keeps watching for the device if it is not present yet.
+6. Bind the HTTP listener, then start the fan controller and LED animation
+   loop, send systemd `READY=1` and start watchdog pings. The fan starts only after a successful
    bind, because a failed bind exits via `log.Fatalf` and would otherwise leave
    a manual duty behind.
 7. After `READY=1`, apply the initial state with retries while
@@ -188,11 +203,13 @@ Shutdown order:
 1. Receive `SIGTERM`/`SIGINT`, send systemd `STOPPING=1`.
 2. Wait for the initial-state retry loop to stop.
 3. Stop the fan controller and return the fan to the EC.
-4. Stop the power monitor and flush the final metrics snapshot.
-5. Stop the SMART monitor and flush persisted alerts.
-6. Stop the LLM poller and persistence loop, then flush `llm.json`.
-7. Close the HTTP server with a 5-second grace period.
-8. Resume any paused game process tree before exiting.
+4. Stop the LED animation and turn the keyboard off.
+5. Stop the power monitor and flush the final metrics snapshot.
+6. Stop the SMART monitor and flush persisted alerts.
+7. Stop the LLM poller and persistence loop, then flush `llm.json`.
+8. Stop the network audit poller.
+9. Close the HTTP server with a 5-second grace period.
+10. Resume any paused game process tree before exiting.
 
 The systemd unit also runs `framework_tool --autofanctrl` as `ExecStopPost`, so
 a crash or watchdog kill returns the fan even when this order cannot run.

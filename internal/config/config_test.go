@@ -725,3 +725,80 @@ func TestFanConfig_Parsing(t *testing.T) {
 		t.Errorf("mode = %q, want the curve default", cfg.Fan.Mode)
 	}
 }
+
+func TestNetworkAuditConfig_Defaults(t *testing.T) {
+	cfg := DefaultConfig().NetworkAudit
+	if !cfg.Enabled {
+		t.Error("network audit must be enabled by default")
+	}
+	if got := cfg.GetPollInterval(); got != 30*time.Second {
+		t.Errorf("poll interval = %v, want 30s", got)
+	}
+}
+
+func TestNetworkAuditConfig_Validate(t *testing.T) {
+	valid := DefaultConfig().NetworkAudit
+	if err := valid.Validate(); err != nil {
+		t.Fatalf("default config invalid: %v", err)
+	}
+
+	invalid := valid
+	invalid.PollInterval = "nope"
+	if err := invalid.Validate(); err == nil {
+		t.Error("invalid poll interval must fail")
+	}
+
+	invalid = valid
+	invalid.PollInterval = "500ms"
+	if err := invalid.Validate(); err == nil {
+		t.Error("poll interval below 1s must fail")
+	}
+
+	invalid = valid
+	invalid.PollInterval = "500ms"
+	invalid.Enabled = false
+	if err := invalid.Validate(); err != nil {
+		t.Errorf("disabled network audit must not validate the interval: %v", err)
+	}
+}
+
+func TestLEDConfig_Defaults(t *testing.T) {
+	cfg := DefaultConfig().LED
+	if cfg.Mode != "off" {
+		t.Errorf("mode = %q, want off", cfg.Mode)
+	}
+	if got := cfg.GetFrameInterval(); got != 250*time.Millisecond {
+		t.Errorf("frame interval = %v, want 250ms", got)
+	}
+}
+
+func TestLEDConfig_Validate(t *testing.T) {
+	valid := DefaultConfig().LED
+	if err := valid.Validate(); err != nil {
+		t.Fatalf("default LED config invalid: %v", err)
+	}
+
+	valid.Mode = "rainbow"
+	valid.FrameInterval = "100ms"
+	if err := valid.Validate(); err != nil {
+		t.Errorf("100ms must be accepted: %v", err)
+	}
+
+	invalid := valid
+	invalid.Mode = "blink"
+	if err := invalid.Validate(); err == nil {
+		t.Error("invalid mode must fail")
+	}
+
+	invalid = valid
+	invalid.FrameInterval = "50ms"
+	if err := invalid.Validate(); err == nil {
+		t.Error("frame interval below 100ms must fail")
+	}
+
+	invalid = valid
+	invalid.FrameInterval = "6s"
+	if err := invalid.Validate(); err == nil {
+		t.Error("frame interval above 5s must fail")
+	}
+}

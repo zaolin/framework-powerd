@@ -47,6 +47,53 @@ def mock_coordinator():
             "lifetime_energy_kwh": 42.125,
         },
         "network_devices": [],
+        "network": {
+            "enabled": True,
+            "listening": [
+                {
+                    "protocol": "tcp",
+                    "address": "0.0.0.0",
+                    "port": 22,
+                    "pid": 4242,
+                    "process": "sshd",
+                    "unit": "ssh.service",
+                },
+                {
+                    "protocol": "tcp",
+                    "address": "127.0.0.1",
+                    "port": 18081,
+                    "pid": 4343,
+                    "process": "docker-proxy",
+                    "container": "llama",
+                    "container_id": "0123456789ab",
+                    "runtime": "docker",
+                },
+                {
+                    "protocol": "udp",
+                    "address": "0.0.0.0",
+                    "port": 53,
+                    "pid": 4243,
+                    "process": "systemd-resolve",
+                    "unit": "systemd-resolved.service",
+                },
+            ],
+            "firewall": {
+                "backend": "nftables",
+                "rules": 4,
+                "allowed": [
+                    {"protocol": "tcp", "ports": "22", "chain": "input"},
+                    {"protocol": "tcp", "ports": "18081", "chain": "input"},
+                ],
+            },
+            "last_update": "2026-01-01T12:00:00Z",
+        },
+        "led": {
+            "mode": "rainbow",
+            "supported": True,
+            "frame": 3,
+            "frame_interval_ms": 250,
+            "last_update": "2026-01-01T12:00:00Z",
+        },
         "memory": {
             "total_bytes": 48838284 * 1024,
             "free_bytes": 8 * 1024**3,
@@ -112,6 +159,8 @@ def mock_coordinator():
                 "llm": "ok",
                 "npu": "ok",
                 "gpu": True,
+                "network": "ok",
+                "led": "ok",
             },
             "metrics_state": {
                 "enabled": True,

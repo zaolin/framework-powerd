@@ -4,7 +4,7 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
-from .const import DOMAIN, FAN_MODES, NPU_POWER_MODES
+from .const import DOMAIN, FAN_MODES, LED_MODES, NPU_POWER_MODES
 from .entity import FrameworkEntity
 
 TUNABLE_MODES = ["performance", "powersave"]
@@ -22,6 +22,7 @@ async def async_setup_entry(
             FrameworkPowerTunableModeSelect(coordinator),
             FrameworkPowerNpuPowerModeSelect(coordinator),
             FrameworkPowerFanModeSelect(coordinator),
+            FrameworkPowerLedModeSelect(coordinator),
         ]
     )
 
@@ -105,3 +106,35 @@ class FrameworkPowerFanModeSelect(FrameworkEntity, SelectEntity):
 
     async def async_select_option(self, option: str) -> None:
         await self.coordinator.async_set_fan_mode(option)
+
+
+class FrameworkPowerLedModeSelect(FrameworkEntity, SelectEntity):
+    """Select the RGB keyboard effect."""
+
+    device_key = "led"
+    device_name = "LED"
+    device_model = "RGB keyboard"
+    _attr_name = "Mode"
+    _attr_unique_id = "led_mode_select"
+    _attr_options = LED_MODES
+    _attr_icon = "mdi:led-strip"
+
+    @property
+    def _led(self):
+        return (self.coordinator.data or {}).get("led") or {}
+
+    @property
+    def available(self):
+        return (
+            self.coordinator.last_update_success
+            and "led" in (self.coordinator.data or {})
+            and bool(self._led.get("supported"))
+        )
+
+    @property
+    def current_option(self):
+        mode = self._led.get("mode")
+        return mode if mode in self._attr_options else None
+
+    async def async_select_option(self, option: str) -> None:
+        await self.coordinator.async_set_led_mode(option)

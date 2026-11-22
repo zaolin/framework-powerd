@@ -26,16 +26,18 @@ const DefaultLLMStateFile = "/var/lib/framework-powerd/llm.json"
 
 // Config represents the daemon configuration
 type Config struct {
-	Server      ServerConfig      `json:"server"`
-	Smartd      SmartdConfig      `json:"smartd"`
-	NVMe        NVMeConfig        `json:"nvme"`
-	GPU         GPUConfig         `json:"gpu"`
-	NPU         NPUConfig         `json:"npu"`
-	Fan         FanConfig         `json:"fan"`
-	Peripherals PeripheralsConfig `json:"peripherals"`
-	Metrics     MetricsConfig     `json:"metrics"`
-	LLM         LLMConfig         `json:"llm"`
-	Pricing     PricingConfig     `json:"pricing"`
+	Server       ServerConfig       `json:"server"`
+	Smartd       SmartdConfig       `json:"smartd"`
+	NVMe         NVMeConfig         `json:"nvme"`
+	GPU          GPUConfig          `json:"gpu"`
+	NPU          NPUConfig          `json:"npu"`
+	Fan          FanConfig          `json:"fan"`
+	LED          LEDConfig          `json:"led"`
+	Peripherals  PeripheralsConfig  `json:"peripherals"`
+	Metrics      MetricsConfig      `json:"metrics"`
+	LLM          LLMConfig          `json:"llm"`
+	Pricing      PricingConfig      `json:"pricing"`
+	NetworkAudit NetworkAuditConfig `json:"network_audit"`
 }
 
 // ServerConfig contains server settings
@@ -201,6 +203,72 @@ func (n *NPUConfig) Validate() error {
 	}
 	if n.Device != "" && !strings.HasPrefix(n.Device, "/dev/accel/") {
 		return fmt.Errorf("npu.device %q must point into /dev/accel", n.Device)
+	}
+	return nil
+}
+
+// NetworkAuditConfig controls local port and firewall inventory.
+type NetworkAuditConfig struct {
+	Enabled      bool   `json:"enabled"`
+	PollInterval string `json:"poll_interval"`
+}
+
+// GetPollInterval parses the network inventory poll interval.
+func (n *NetworkAuditConfig) GetPollInterval() time.Duration {
+	d, err := time.ParseDuration(n.PollInterval)
+	if err != nil || d < time.Second {
+		return 30 * time.Second
+	}
+	return d
+}
+
+// Validate checks the network inventory settings.
+func (n *NetworkAuditConfig) Validate() error {
+	if !n.Enabled {
+		return nil
+	}
+	if n.PollInterval != "" {
+		d, err := time.ParseDuration(n.PollInterval)
+		if err != nil {
+			return fmt.Errorf("network_audit.poll_interval %q is not a valid duration: %w", n.PollInterval, err)
+		}
+		if d < time.Second {
+			return fmt.Errorf("network_audit.poll_interval must be at least 1s, got %q", n.PollInterval)
+		}
+	}
+	return nil
+}
+
+// LEDConfig controls the RGB keyboard backlight effects.
+type LEDConfig struct {
+	Mode          string `json:"mode"`
+	FrameInterval string `json:"frame_interval"`
+}
+
+// GetFrameInterval parses the rainbow frame interval.
+func (l *LEDConfig) GetFrameInterval() time.Duration {
+	d, err := time.ParseDuration(l.FrameInterval)
+	if err != nil || d < 100*time.Millisecond || d > 5*time.Second {
+		return 250 * time.Millisecond
+	}
+	return d
+}
+
+// Validate checks the LED mode and animation timing.
+func (l *LEDConfig) Validate() error {
+	switch l.Mode {
+	case "", "off", "white", "rainbow":
+	default:
+		return fmt.Errorf("led.mode must be off, white or rainbow, got %q", l.Mode)
+	}
+	if l.FrameInterval != "" {
+		d, err := time.ParseDuration(l.FrameInterval)
+		if err != nil {
+			return fmt.Errorf("led.frame_interval %q is not a valid duration: %w", l.FrameInterval, err)
+		}
+		if d < 100*time.Millisecond || d > 5*time.Second {
+			return fmt.Errorf("led.frame_interval must be between 100ms and 5s, got %q", l.FrameInterval)
+		}
 	}
 	return nil
 }
@@ -524,6 +592,14 @@ func DefaultConfig() *Config {
 		NPU: NPUConfig{
 			Enabled:      false,
 			PollInterval: "15s",
+		},
+		NetworkAudit: NetworkAuditConfig{
+			Enabled:      true,
+			PollInterval: "30s",
+		},
+		LED: LEDConfig{
+			Mode:          "off",
+			FrameInterval: "250ms",
 		},
 		Fan: FanConfig{
 			Enabled:            false,

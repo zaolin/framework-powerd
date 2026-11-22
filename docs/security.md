@@ -2,7 +2,8 @@
 
 The daemon's HTTP API is a **control plane**, not just a status endpoint. It can
 change power profiles, send `SIGSTOP`/`SIGCONT` to game process trees, switch the
-NPU power mode and take over EC fan control. Treat it accordingly.
+NPU power mode, take over EC fan control and change the RGB keyboard LEDs. Treat
+it accordingly.
 
 ## Authentication
 
@@ -38,6 +39,10 @@ with `make token`.
 - `/healthz` is unauthenticated by design. It exposes version, uptime, idle
   state, memory percentage, monitor booleans and the metrics file path/status.
   It does not expose the JWT secret or control-plane actions.
+- `/network/stats` is authenticated. It exposes listening addresses and local
+  process, systemd unit and container names, but only reads procfs, cgroups,
+  local runtime metadata and local firewall rules. No active network scan or
+  connection capture is performed, and the inventory is not persisted.
 - All other endpoints require auth.
 
 ## `--disable-auth`
@@ -47,8 +52,8 @@ leaves the control plane open. Only use it with `server.address=localhost`.
 
 ## Rate limiting
 
-`POST /mode`, `POST /activity`, `POST /npu/power-mode` and `POST /fan/mode` are
-limited to 1 request/second with a burst of 5 per client IP. The limiter keys on
+`POST /mode`, `POST /activity`, `POST /npu/power-mode`, `POST /fan/mode` and
+`POST /led/mode` are limited to 1 request/second with a burst of 5 per client IP. The limiter keys on
 the IP, not the TCP source port, so opening new connections does not bypass it.
 Idle buckets are pruned.
 

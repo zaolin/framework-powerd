@@ -1256,6 +1256,113 @@ class TestAllEntityCategories:
             s.DaemonHealthSensor(mock_coordinator),
             s.KernelVersionSensor(mock_coordinator),
             s.TotalRAMSensor(mock_coordinator),
+            s.NetworkListeningTCPSensor(mock_coordinator),
+            s.NetworkListeningUDPSensor(mock_coordinator),
+            s.NetworkInventorySensor(mock_coordinator),
+            s.NetworkFirewallRulesSensor(mock_coordinator),
+            s.NetworkFirewallBackendSensor(mock_coordinator),
         ]
         for entity in entities:
             assert entity._attr_entity_category is EntityCategory.DIAGNOSTIC, type(entity).__name__
+
+
+class TestNetworkAuditSensors:
+    """The network inventory needs no configured port or service list."""
+
+    def test_listening_counts(self, mock_coordinator):
+        from custom_components.framework_powerd.sensor import (
+            NetworkListeningTCPSensor,
+            NetworkListeningUDPSensor,
+        )
+
+        assert NetworkListeningTCPSensor(mock_coordinator).native_value == 2
+        assert NetworkListeningUDPSensor(mock_coordinator).native_value == 1
+
+    def test_inventory(self, mock_coordinator):
+        from custom_components.framework_powerd.sensor import NetworkInventorySensor
+
+        sensor = NetworkInventorySensor(mock_coordinator)
+        assert sensor.native_value == 3
+        attrs = sensor.extra_state_attributes
+        assert attrs["truncated"] is False
+        assert attrs["sockets"][1]["container"] == "llama"
+        assert attrs["sockets"][1]["runtime"] == "docker"
+        assert attrs["sockets"][0]["unit"] == "ssh.service"
+
+    def test_firewall(self, mock_coordinator):
+        from custom_components.framework_powerd.sensor import (
+            NetworkFirewallBackendSensor,
+            NetworkFirewallRulesSensor,
+        )
+
+        assert NetworkFirewallBackendSensor(mock_coordinator).native_value == "nftables"
+        rules = NetworkFirewallRulesSensor(mock_coordinator)
+        assert rules.native_value == 4
+        assert rules.extra_state_attributes["allowed"][1]["ports"] == "18081"
+
+    def test_inventory_attribute_cap(self, mock_coordinator):
+        from custom_components.framework_powerd.sensor import (
+            NETWORK_INVENTORY_LIMIT,
+            NetworkInventorySensor,
+        )
+
+        mock_coordinator.data["network"]["listening"] = [
+            {"protocol": "tcp", "address": "127.0.0.1", "port": 10000 + i}
+            for i in range(NETWORK_INVENTORY_LIMIT + 10)
+        ]
+        attrs = NetworkInventorySensor(mock_coordinator).extra_state_attributes
+        assert len(attrs["sockets"]) == NETWORK_INVENTORY_LIMIT
+        assert attrs["truncated"] is True
+
+    def test_network_device(self, mock_coordinator):
+        from custom_components.framework_powerd.sensor import NetworkInventorySensor
+
+        sensor = NetworkInventorySensor(mock_coordinator)
+        info = sensor.device_info
+        assert info["name"] == "Network"
+        assert info["model"] == "Network audit"
+        assert ("framework_powerd", "localhost:8080:network") in info["identifiers"]
+        assert info["via_device"] == ("framework_powerd", "localhost:8080")
+
+    def test_build_network_entities(self, mock_coordinator):
+        from custom_components.framework_powerd.sensor import build_network_entities
+
+        assert len(build_network_entities(mock_coordinator)) == 5
+        del mock_coordinator.data["network"]
+        assert build_network_entities(mock_coordinator) == []
+
+    def test_existing_entities_unavailable_when_block_disappears(self, mock_coordinator):
+        from custom_components.framework_powerd.sensor import NetworkInventorySensor
+
+        sensor = NetworkInventorySensor(mock_coordinator)
+        assert sensor.available is True
+        del mock_coordinator.data["network"]
+        assert sensor.available is False
+
+
+class TestLedStatusSensor:
+    def test_status(self, mock_coordinator):
+        from custom_components.framework_powerd.sensor import LedStatusSensor
+
+        sensor = LedStatusSensor(mock_coordinator)
+        assert sensor.native_value == "rainbow"
+        attrs = sensor.extra_state_attributes
+        assert attrs["frame"] == 3
+        assert attrs["frame_interval_ms"] == 250
+        assert attrs["supported"] is True
+
+    def test_device(self, mock_coordinator):
+        from custom_components.framework_powerd.sensor import LedStatusSensor
+
+        info = LedStatusSensor(mock_coordinator).device_info
+        assert info["name"] == "LED"
+        assert info["model"] == "RGB keyboard"
+        assert ("framework_powerd", "localhost:8080:led") in info["identifiers"]
+        assert info["via_device"] == ("framework_powerd", "localhost:8080")
+
+    def test_build_led_entities(self, mock_coordinator):
+        from custom_components.framework_powerd.sensor import build_led_entities
+
+        assert len(build_led_entities(mock_coordinator)) == 1
+        del mock_coordinator.data["led"]
+        assert build_led_entities(mock_coordinator) == []

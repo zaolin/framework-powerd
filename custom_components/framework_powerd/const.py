@@ -17,3 +17,5 @@ NPU_POWER_MODES = ["default", "low", "medium", "high", "turbo"]
 
 # Fan control modes: the EC curve or the daemon curve.
 FAN_MODES = ["auto", "curve"]
+
+LED_MODES = ["off", "white", "rainbow"]

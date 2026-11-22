@@ -16,8 +16,10 @@ A Go daemon to automatically manage power profiles on the **Framework Desktop**,
 - **GPU and CPU Monitoring**: Tracks AMD GPU metrics via sysfs (VRAM, GTT, temperature, power), CPU usage via `/proc/stat` and the CPU die temperature from `k10temp`.
 - **NPU Monitoring**: Reads AMD XDNA telemetry through the accel DRM interface: NPU power, per-column AIE utilization, clocks, TOPs, hardware contexts with owning PIDs, firmware, and a switchable power mode.
 - **EC Fan Control**: Drives the Framework EC fan with a temperature curve: a steady 50 % baseline, a ramp from 75 to 90 °C, hysteresis and a systemd fallback that hands the fan back to the EC when the daemon stops.
+- **RGB Keyboard LEDs**: Off by default; static white for chassis inspection and a moving rainbow animation, with API and Home Assistant control through `framework_tool`.
 - **SMART Health Monitoring**: Monitors smartd journald logs, keeps sticky persisted alerts, and classifies health, wear and sector failures.
 - **NVMe Health Polling**: Directly polls `nvme smart-log`/`smartctl` for wear, available spare, media errors, error-log growth and temperature, with configurable warning/critical thresholds.
+- **Network Audit**: Automatically inventories listening ports, owning processes, systemd units, Docker/Podman containers and local firewall rules, without a configured port list or active scans.
 - **Storage Notifications**: Home Assistant persistent notifications and optional `notify_service` calls for new SMART/NVMe warnings.
 - **LLM Request Accounting**: Attributes LLM API requests to client IPs and IP groups by reading a Caddy access log in front of `llama-server`, with per-day request shares, energy and cost estimates.
 - **HA Controls**: Selects for performance/powersave, NPU power mode and fan mode, a button to reset the idle timer, and `framework_powerd.*` services for automations.
@@ -110,7 +112,8 @@ The daemon relies on the following tools:
 - `libsystemd-dev`: Required for building (SMART journald integration uses cgo).
 - `smartmontools` (`smartd`, `smartctl`): SMART journal monitoring and NVMe fallback polling.
 - `nvme-cli` (`nvme`): Preferred direct NVMe health polling (optional but recommended).
-- `framework_tool`: EC fan control and fan telemetry (optional; control requires root).
+- `nft`/`iptables`/`firewall-cmd` (Optional): local firewall rule inventory; listening-port discovery works without them.
+- `framework_tool`: EC fan control, fan telemetry and RGB keyboard effects (optional; writes require root).
 - `powertop` (Optional): For auto-tuning power parameters.
 - `scxctl` (Optional): For sched-ext scheduler management (pinned to gaming mode).
 

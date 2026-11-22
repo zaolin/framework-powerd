@@ -22,8 +22,10 @@ import (
 	"github.com/zaolin/framework-powerd/internal/detector"
 	"github.com/zaolin/framework-powerd/internal/fan"
 	"github.com/zaolin/framework-powerd/internal/gpu"
+	"github.com/zaolin/framework-powerd/internal/led"
 	"github.com/zaolin/framework-powerd/internal/llm"
 	"github.com/zaolin/framework-powerd/internal/monitor"
+	"github.com/zaolin/framework-powerd/internal/netaudit"
 	"github.com/zaolin/framework-powerd/internal/npu"
 	"github.com/zaolin/framework-powerd/internal/nvme"
 	"github.com/zaolin/framework-powerd/internal/peripherals"
@@ -152,6 +154,12 @@ func runServer() {
 		log.Fatalf("Invalid configuration: %v", err)
 	}
 	if err := cfg.Fan.Validate(); err != nil {
+		log.Fatalf("Invalid configuration: %v", err)
+	}
+	if err := cfg.NetworkAudit.Validate(); err != nil {
+		log.Fatalf("Invalid configuration: %v", err)
+	}
+	if err := cfg.LED.Validate(); err != nil {
 		log.Fatalf("Invalid configuration: %v", err)
 	}
 
@@ -487,6 +495,24 @@ func runServer() {
 		go npuMonitor.Start(npuCtx)
 	}
 
+	// Start the local listening-port and firewall inventory. It is enabled by
+	// default and needs no list of ports or services in the configuration.
+	var networkMonitor *netaudit.Monitor
+	var networkCancel context.CancelFunc
+	var networkDone chan struct{}
+	if cfg.NetworkAudit.Enabled {
+		log.Println("Network audit enabled")
+		networkMonitor = netaudit.NewMonitor(cfg.NetworkAudit)
+		networkCtx, cancel := context.WithCancel(context.Background())
+		networkCancel = cancel
+		defer networkCancel()
+		networkDone = make(chan struct{})
+		go func() {
+			defer close(networkDone)
+			networkMonitor.Start(networkCtx)
+		}()
+	}
+
 	// Start fan control (if enabled)
 	var fanMonitor *fan.Monitor
 	var fanCancel context.CancelFunc
@@ -497,11 +523,18 @@ func runServer() {
 		fanDone = make(chan struct{})
 	}
 
+	// Start the RGB keyboard controller. Off performs no hardware writes;
+	// white and rainbow can also be selected later through the API.
+	ledController := led.NewController(cfg.LED)
+	ledCtx, ledCancel := context.WithCancel(context.Background())
+	defer ledCancel()
+	ledDone := make(chan struct{})
+
 	// Start API Server (S3+S8: dedicated mux, explicit timeouts, body limits)
 	// Collect static system info once at startup.
 	sysInfo := sysinfo.Collect()
 
-	apiServer := api.NewServer(pm, powerMon, jwtSecret, smartdMonitor, nvmeMonitor, llmMonitor, npuMonitor, fanMonitor, gpuMonitor, sysInfo)
+	apiServer := api.NewServer(pm, powerMon, jwtSecret, smartdMonitor, nvmeMonitor, llmMonitor, npuMonitor, fanMonitor, gpuMonitor, sysInfo, networkMonitor, ledController)
 
 	mux := http.NewServeMux()
 
@@ -516,6 +549,9 @@ func runServer() {
 	npuModeHandler := apiServer.AuthMiddleware(apiServer.RateLimit(apiServer.HandleNPUPowerMode))
 	fanHandler := apiServer.AuthMiddleware(apiServer.HandleFanStats)
 	fanModeHandler := apiServer.AuthMiddleware(apiServer.RateLimit(apiServer.HandleFanMode))
+	networkHandler := apiServer.AuthMiddleware(apiServer.HandleNetworkStats)
+	ledStatsHandler := apiServer.AuthMiddleware(apiServer.HandleLEDStats)
+	ledModeHandler := apiServer.AuthMiddleware(apiServer.RateLimit(apiServer.HandleLEDMode))
 
 	// When auth is disabled (--disable-auth), AuthMiddleware passes through.
 	if authEnabled {
@@ -537,6 +573,9 @@ func runServer() {
 	mux.HandleFunc("/npu/power-mode", npuModeHandler)
 	mux.HandleFunc("/fan/stats", fanHandler)
 	mux.HandleFunc("/fan/mode", fanModeHandler)
+	mux.HandleFunc("/network/stats", networkHandler)
+	mux.HandleFunc("/led/stats", ledStatsHandler)
+	mux.HandleFunc("/led/mode", ledModeHandler)
 	// S8: 404 catch-all for unmatched paths.
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
@@ -557,6 +596,13 @@ func runServer() {
 	if err != nil {
 		log.Fatalf("Failed to listen on %s: %v", addr, err)
 	}
+
+	// Start the LED loop only after the listener is bound, for the same reason
+	// as the fan: a failed bind exits via log.Fatalf without running cleanup.
+	go func() {
+		defer close(ledDone)
+		ledController.Start(ledCtx)
+	}()
 
 	// Start the fan only after the listener is bound: a failed bind exits via
 	// log.Fatalf, which skips deferred cleanup, and the fan must not be left on
@@ -653,6 +699,7 @@ func runServer() {
 	}
 
 	close(shutdownStarted)
+	ledController.BeginShutdown()
 	_, _ = daemon.SdNotify(false, daemon.SdNotifyStopping)
 
 	// The initial-state retry can be inside updatePowerState. Let it leave
@@ -666,6 +713,15 @@ func runServer() {
 			fanCancel()
 		}
 		<-fanDone
+	}
+
+	// Stop the animation and turn the keyboard off after handing the fan back.
+	if ledCancel != nil {
+		ledCancel()
+	}
+	<-ledDone
+	if err := ledController.Stop(context.Background()); err != nil {
+		log.Printf("Failed to turn off keyboard LEDs: %v", err)
 	}
 
 	// Stop producing new power samples, then flush the final metrics state.
@@ -695,6 +751,13 @@ func runServer() {
 		if err := llmMonitor.SaveState(); err != nil {
 			log.Printf("Failed to save LLM state on shutdown: %v", err)
 		}
+	}
+
+	if networkMonitor != nil {
+		if networkCancel != nil {
+			networkCancel()
+		}
+		<-networkDone
 	}
 
 	// Give the HTTP server up to 5 seconds to finish in-flight requests.

@@ -149,6 +149,34 @@ EC fan control; see [EC Fan Control](fan.md).
 The shipped systemd unit returns the fan to the EC with `ExecStopPost` on stop,
 crash and watchdog kill.
 
+### `led`
+
+RGB keyboard backlight control through `framework_tool --rgbkbd`. The effects
+are independent of the fan curve and off by default.
+
+| Key | Type | Default | Description |
+|---|---|---|---|
+| `mode` | string | `off` | `off`, `white` for chassis inspection, or `rainbow` for the moving effect. |
+| `frame_interval` | duration | `250ms` | Rainbow frame interval, 100 ms–5 s. |
+
+Off performs no writes on startup. White and rainbow can also be selected at
+runtime through `/led/mode`. Shutdown stops the animation and turns the LEDs off.
+
+### `network_audit`
+
+Automatic local listening-port and firewall inventory. No ports or services need
+to be listed; everything is discovered. Enabled by default.
+
+| Key | Type | Default | Description |
+|---|---|---|---|
+| `enabled` | bool | `true` | Inventory listening sockets and local firewall rules. |
+| `poll_interval` | duration | `30s` | Inventory interval, minimum 1 s. |
+
+Listening sockets come from procfs and are mapped to their owning PID, systemd
+unit and, when available, Docker/Podman container name through the local runtime
+socket. Firewall rules are read from `nft --json list ruleset`, with
+`iptables`/`firewalld` as fallbacks. No active network scan is performed.
+
 ### `metrics`
 
 | Key | Type | Default | Description |
@@ -178,7 +206,7 @@ Optional overrides for the peripheral power estimator. Zero values mean
 
 ## Validation
 
-Validation runs at startup. The `nvme`, `npu`, `fan` and `llm` checks apply
+Validation runs at startup. The `nvme`, `npu`, `fan`, `network_audit` and `llm` checks apply
 only when their section is enabled, and `pricing` is checked when LLM accounting
 is enabled. Invalid values abort startup instead of silently falling back, with
 two exceptions: an unparsable or non-positive `gpu.poll_interval` falls back to
@@ -202,6 +230,9 @@ whenever it is set.
   `fall_step_percent` are 0–100; `full_temp_c` must be above `start_temp_c`;
   `critical_temp_c` must not be below `full_temp_c`; `board_critical_temp_c`
   is 0–125; `hysteresis_c` is 0–30; `poll_interval` must be at least 1 s.
+- `network_audit.poll_interval` must be at least 1 s when set.
+- `led.mode` must be `off`, `white` or `rainbow`; `led.frame_interval` must be
+  between 100 ms and 5 s when set.
 - `llm.access_log` must be set and `counted_paths` must not be empty when LLM
   accounting is enabled; `history_days` must not be negative; group names must
   be non-empty and unique (case-insensitive); group CIDRs must be valid CIDRs
@@ -259,6 +290,14 @@ whenever it is set.
     "hysteresis_c": 3,
     "fall_step_percent": 3,
     "poll_interval": "5s"
+  },
+  "led": {
+    "mode": "off",
+    "frame_interval": "250ms"
+  },
+  "network_audit": {
+    "enabled": true,
+    "poll_interval": "30s"
   },
   "metrics": {
     "persist": true,

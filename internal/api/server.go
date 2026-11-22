@@ -13,7 +13,9 @@ import (
 
 	"github.com/zaolin/framework-powerd/internal/fan"
 	"github.com/zaolin/framework-powerd/internal/gpu"
+	"github.com/zaolin/framework-powerd/internal/led"
 	"github.com/zaolin/framework-powerd/internal/llm"
+	"github.com/zaolin/framework-powerd/internal/netaudit"
 	"github.com/zaolin/framework-powerd/internal/npu"
 	"github.com/zaolin/framework-powerd/internal/nvme"
 	"github.com/zaolin/framework-powerd/internal/power"
@@ -55,6 +57,8 @@ type StatusResponse struct {
 	GPU              *gpu.Stats                  `json:"gpu,omitempty"`
 	NPU              *npu.Stats                  `json:"npu,omitempty"`
 	Fan              *fan.Stats                  `json:"fan,omitempty"`
+	Network          *netaudit.Stats             `json:"network,omitempty"`
+	LED              *led.Stats                  `json:"led,omitempty"`
 	SystemInfo       sysinfo.SystemInfo          `json:"system_info"`
 	Health           HealthResponse              `json:"health"`
 }
@@ -68,6 +72,8 @@ type MonitorHealth struct {
 	NPU       string `json:"npu"`  // disabled | absent | ok | waiting | error
 	Fan       string `json:"fan"`  // disabled | unsupported | waiting | auto | curve | error
 	GPU       bool   `json:"gpu"`
+	Network   string `json:"network"` // disabled | waiting | ok | error
+	LED       string `json:"led"`     // disabled | unsupported | waiting | ok | error
 }
 
 // HealthResponse is the unauthenticated /healthz payload.
@@ -84,17 +90,19 @@ type HealthResponse struct {
 
 // Server handles API requests
 type Server struct {
-	pm            *power.PowerManager
-	powerMonitor  *power.PowerMonitor
-	smartdMonitor *smartd.Monitor
-	nvmeMonitor   *nvme.Monitor
-	llmMonitor    *llm.Monitor
-	gpuMonitor    *gpu.Monitor
-	npuMonitor    *npu.Monitor
-	fanMonitor    *fan.Monitor
-	jwtSecret     []byte
-	sysInfo       sysinfo.SystemInfo
-	startedAt     time.Time
+	pm             *power.PowerManager
+	powerMonitor   *power.PowerMonitor
+	smartdMonitor  *smartd.Monitor
+	nvmeMonitor    *nvme.Monitor
+	llmMonitor     *llm.Monitor
+	gpuMonitor     *gpu.Monitor
+	npuMonitor     *npu.Monitor
+	fanMonitor     *fan.Monitor
+	networkMonitor *netaudit.Monitor
+	ledController  *led.Controller
+	jwtSecret      []byte
+	sysInfo        sysinfo.SystemInfo
+	startedAt      time.Time
 
 	// rateLimiter per-client token bucket for /mode and /activity (S9).
 	rateMu      sync.Mutex
@@ -102,20 +110,22 @@ type Server struct {
 }
 
 // NewServer creates a new API server
-func NewServer(pm *power.PowerManager, monitor *power.PowerMonitor, jwtSecret string, smartdMon *smartd.Monitor, nvmeMon *nvme.Monitor, llmMon *llm.Monitor, npuMon *npu.Monitor, fanMon *fan.Monitor, gpuMon *gpu.Monitor, sysInfo sysinfo.SystemInfo) *Server {
+func NewServer(pm *power.PowerManager, monitor *power.PowerMonitor, jwtSecret string, smartdMon *smartd.Monitor, nvmeMon *nvme.Monitor, llmMon *llm.Monitor, npuMon *npu.Monitor, fanMon *fan.Monitor, gpuMon *gpu.Monitor, sysInfo sysinfo.SystemInfo, networkMon *netaudit.Monitor, ledController *led.Controller) *Server {
 	return &Server{
-		pm:            pm,
-		powerMonitor:  monitor,
-		smartdMonitor: smartdMon,
-		nvmeMonitor:   nvmeMon,
-		llmMonitor:    llmMon,
-		gpuMonitor:    gpuMon,
-		npuMonitor:    npuMon,
-		fanMonitor:    fanMon,
-		jwtSecret:     []byte(jwtSecret),
-		sysInfo:       sysInfo,
-		startedAt:     time.Now(),
-		rateBuckets:   make(map[string]*rateBucket),
+		pm:             pm,
+		powerMonitor:   monitor,
+		smartdMonitor:  smartdMon,
+		nvmeMonitor:    nvmeMon,
+		llmMonitor:     llmMon,
+		gpuMonitor:     gpuMon,
+		npuMonitor:     npuMon,
+		fanMonitor:     fanMon,
+		networkMonitor: networkMon,
+		ledController:  ledController,
+		jwtSecret:      []byte(jwtSecret),
+		sysInfo:        sysInfo,
+		startedAt:      time.Now(),
+		rateBuckets:    make(map[string]*rateBucket),
 	}
 }
 
@@ -312,6 +322,14 @@ func (s *Server) HandleStatus(w http.ResponseWriter, r *http.Request) {
 		stats := s.llmMonitor.GetStats()
 		resp.LLM = &stats
 	}
+	if s.networkMonitor != nil {
+		stats := s.networkMonitor.GetStats()
+		resp.Network = &stats
+	}
+	if s.ledController != nil {
+		stats := s.ledController.GetStats()
+		resp.LED = &stats
+	}
 	if s.gpuMonitor != nil {
 		stats := s.gpuMonitor.GetStats()
 		resp.GPU = &stats
@@ -368,7 +386,17 @@ func (s *Server) buildHealth(isIdle bool) HealthResponse {
 		fanHealth = s.fanMonitor.Health()
 	}
 
-	status := healthStatus(turbostat, time.Since(s.startedAt), metrics.LastError, llmHealth, npuHealth, fanHealth, nvmeHealth)
+	networkHealth := "disabled"
+	if s.networkMonitor != nil {
+		networkHealth = s.networkMonitor.Health()
+	}
+
+	ledHealth := "disabled"
+	if s.ledController != nil {
+		ledHealth = s.ledController.Health()
+	}
+
+	status := healthStatus(turbostat, time.Since(s.startedAt), metrics.LastError, llmHealth, npuHealth, fanHealth, nvmeHealth, networkHealth, ledHealth)
 
 	return HealthResponse{
 		Status:                status,
@@ -385,6 +413,8 @@ func (s *Server) buildHealth(isIdle bool) HealthResponse {
 			NPU:       npuHealth,
 			Fan:       fanHealth,
 			GPU:       s.gpuMonitor != nil,
+			Network:   networkHealth,
+			LED:       ledHealth,
 		},
 		MetricsState: metrics,
 	}
@@ -392,13 +422,15 @@ func (s *Server) buildHealth(isIdle bool) HealthResponse {
 
 // healthStatus derives the overall status from the individual monitors.
 // turbostat "waiting" is tolerated during the first 30 seconds of uptime.
-func healthStatus(turbostat string, uptime time.Duration, metricsErr, llmHealth, npuHealth, fanHealth, nvmeHealth string) string {
+func healthStatus(turbostat string, uptime time.Duration, metricsErr, llmHealth, npuHealth, fanHealth, nvmeHealth, networkHealth, ledHealth string) string {
 	if turbostat == "stale" ||
 		(turbostat == "waiting" && uptime > 30*time.Second) ||
 		metricsErr != "" ||
 		llmHealth == "error" ||
 		npuHealth == "error" ||
 		fanHealth == "error" ||
+		networkHealth == "error" ||
+		ledHealth == "error" ||
 		(nvmeHealth != "disabled" && nvmeHealth != nvme.HealthOK) {
 		return "degraded"
 	}
@@ -539,6 +571,63 @@ func (s *Server) HandleNPUPowerMode(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, map[string]string{"mode": req.Mode})
+}
+
+// HandleNetworkStats returns the local listening-port and firewall inventory.
+func (s *Server) HandleNetworkStats(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if s.networkMonitor == nil {
+		http.Error(w, "Network audit not enabled", http.StatusNotFound)
+		return
+	}
+
+	writeJSON(w, http.StatusOK, s.networkMonitor.GetStats())
+}
+
+// HandleLEDStats returns the RGB keyboard controller state.
+func (s *Server) HandleLEDStats(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if s.ledController == nil {
+		http.Error(w, "LED control not enabled", http.StatusNotFound)
+		return
+	}
+	writeJSON(w, http.StatusOK, s.ledController.GetStats())
+}
+
+// HandleLEDMode selects the keyboard effect: off, white or rainbow.
+func (s *Server) HandleLEDMode(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if s.ledController == nil {
+		http.Error(w, "LED control not enabled", http.StatusNotFound)
+		return
+	}
+
+	r.Body = http.MaxBytesReader(w, r.Body, maxRequestBody)
+	var request struct {
+		Mode string `json:"mode"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+		http.Error(w, "Invalid JSON body", http.StatusBadRequest)
+		return
+	}
+	if request.Mode == "" {
+		http.Error(w, "mode is required", http.StatusBadRequest)
+		return
+	}
+	if err := s.ledController.SetMode(r.Context(), request.Mode); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"mode": request.Mode})
 }
 
 // HandleLLMStats returns LLM request accounting statistics.

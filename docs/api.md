@@ -14,8 +14,8 @@ valid token. Non-Bearer schemes are rejected.
 
 ## Rate limiting
 
-`POST /mode`, `POST /activity`, `POST /npu/power-mode` and `POST /fan/mode`
-allow **1 request/second with a burst of 5** per client IP. Exceeding it returns
+`POST /mode`, `POST /activity`, `POST /npu/power-mode`, `POST /fan/mode` and
+`POST /led/mode` allow **1 request/second with a burst of 5** per client IP. Exceeding it returns
 `429 Too Many Requests`.
 
 All JSON responses set `Cache-Control: no-store`.
@@ -32,7 +32,7 @@ curl http://localhost:8080/healthz
 ```json
 {
   "status": "ok",
-  "version": "1.9.1",
+  "version": "1.10.0",
   "uptime_seconds": 12345.6,
   "is_idle": false,
   "power_sample_age_seconds": 1.2,
@@ -44,7 +44,9 @@ curl http://localhost:8080/healthz
     "llm": "ok",
     "npu": "ok",
     "fan": "curve",
-    "gpu": true
+    "gpu": true,
+    "network": "ok",
+    "led": "disabled"
   },
   "metrics_state": {
     "enabled": true,
@@ -59,8 +61,8 @@ curl http://localhost:8080/healthz
   `waiting` (no sample yet).
 - `status` becomes `degraded` when turbostat is stale, still waiting after the
   30-second startup grace period, the last metrics write failed, LLM accounting,
-  NPU monitoring or fan control reports `error`, or any NVMe device is
-  `warning`/`critical`.
+  NPU monitoring, fan control, network auditing or LED control reports `error`,
+  or any NVMe device is `warning`/`critical`.
 - `monitors.nvme` is `disabled`, `ok`, `warning` or `critical`.
 - `monitors.llm` is `disabled`, `ok`, `waiting` or `error`. Only `error`
   degrades the status; `waiting` is normal before the first counted request.
@@ -69,6 +71,11 @@ curl http://localhost:8080/healthz
 - `monitors.fan` is `disabled`, `unsupported`, `waiting`, `auto`, `curve` or
   `error`. Missing `framework_tool` reports `unsupported` and does not degrade
   the status.
+- `monitors.network` is `disabled`, `waiting`, `ok` or `error`. The network
+  inventory is enabled by default and needs no configured port list.
+- `monitors.led` is `disabled`, `unsupported`, `waiting`, `ok` or `error`.
+  `off` reports `disabled`; missing `framework_tool` reports `unsupported`
+  without degrading the daemon.
 - `last_error` is omitted while persistence is healthy.
 
 ## `GET /status`
@@ -158,7 +165,7 @@ Full daemon state. Requires auth.
     "cpu_model": "AMD Ryzen AI 7 350 w/ Radeon 860M",
     "cpu_count": 16,
     "total_ram_bytes": 50010562560,
-    "daemon_version": "1.9.1"
+    "daemon_version": "1.10.0"
   }
 }
 ```
@@ -176,7 +183,9 @@ Notes:
   NVMe polling is enabled; `llm` when LLM accounting is enabled (the block
   matches `GET /llm/stats`); `npu` when NPU monitoring is enabled (always with
   `present`, telemetry filled only while a device is available); `fan` when fan
-  control is enabled (mode, commanded duty, sensors, current RPM).
+  control is enabled (mode, commanded duty, sensors, current RPM); `network`
+  when network auditing is enabled (the default); `led` is always present and
+  starts in `off` mode.
 - `gpu.cpu_temperature_celsius` is the CPU die temperature from `k10temp`;
   the field is omitted when no `k10temp` sensor is available.
   `gpu.temperature_celsius` is the GPU edge temperature.
@@ -368,6 +377,93 @@ curl -X POST http://localhost:8080/fan/mode \
 
 Accepted values are `auto` and `curve`. Setting `auto` calls
 `framework_tool --autofanctrl` before returning.
+
+## `GET /network/stats`
+
+Returns the local listening-port and firewall inventory when network auditing is
+enabled; otherwise `404`. Requires auth.
+
+```json
+{
+  "enabled": true,
+  "listening": [
+    {
+      "protocol": "tcp",
+      "address": "0.0.0.0",
+      "port": 22,
+      "pid": 4242,
+      "process": "sshd",
+      "unit": "ssh.service"
+    },
+    {
+      "protocol": "tcp",
+      "address": "127.0.0.1",
+      "port": 18081,
+      "pid": 4343,
+      "process": "docker-proxy",
+      "container": "llama",
+      "container_id": "0123456789ab",
+      "runtime": "docker"
+    }
+  ],
+  "firewall": {
+    "backend": "nftables",
+    "rules": 4,
+    "allowed": [
+      {"protocol": "tcp", "ports": "22", "chain": "input"},
+      {"protocol": "udp", "ports": "53-54", "chain": "input"}
+    ]
+  },
+  "last_update": "2026-11-21T12:00:00Z"
+}
+```
+
+Listening TCP sockets and unconnected UDP sockets are read from procfs. The
+socket inode is mapped to the owning PID; systemd units come from cgroups.
+Docker/Podman names are resolved through the local runtime Unix socket, either
+from the container cgroup or from its published port mapping. Unknown owners
+keep only the fields that could be determined.
+
+`firewall.backend` is `waiting`, `nftables`, `iptables`, `firewalld`,
+`unsupported` or `error`. `allowed` contains only accepting rules with an explicit destination
+port; `ports` is a single port, a comma-separated list or a range. `rules` is
+the number of parsed firewall rules. No active network scan is performed.
+
+## `GET /led/stats`
+
+Returns the RGB keyboard controller state. Requires auth.
+
+```json
+{
+  "mode": "rainbow",
+  "supported": true,
+  "driver": "cros-ec",
+  "frame": 3,
+  "frame_interval_ms": 250,
+  "last_update": "2026-11-22T12:00:00Z"
+}
+```
+
+`mode` is `off`, `white` or `rainbow`. `frame` is the current rainbow frame;
+`last_error` describes a failed `framework_tool` write. `driver` is the working
+EC driver after a fallback. A failed default-driver write is retried with
+`--driver cros-ec`; the mode is committed only after a successful write.
+`monitors.led` in `/healthz` reports `disabled`, `unsupported`, `waiting`, `ok`
+or `error`.
+
+## `POST /led/mode`
+
+Selects the keyboard effect. Requires auth and is rate limited.
+
+```bash
+curl -X POST http://localhost:8080/led/mode \
+  -H "Authorization: Bearer $TOKEN" \
+  -d '{"mode":"rainbow"}'
+```
+
+Accepted values are `off`, `white` and `rainbow`. White is a static inspection
+mode; rainbow moves the palette through all eight LEDs. Off performs no startup
+writes and shutdown turns the LEDs off. A missing `framework_tool` returns 400.
 
 ## Errors
 

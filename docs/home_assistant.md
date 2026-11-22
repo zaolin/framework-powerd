@@ -29,6 +29,8 @@ entity where it belongs.
 | GPU | temperature, power, VRAM and GTT usage |
 | NPU | power, column utilization, clocks, TOPs, contexts, firmware, power mode |
 | Fan | speed, duty, mainboard and CPU board temperatures, mode |
+| LED | RGB keyboard effect and controller status |
+| Network | listening-port inventory, service/container mapping, firewall backend and rules |
 | LLM | request counters, energy and cost |
 | NVMe nvme0 (one per drive) | health, temperature, wear, spare, errors, data written |
 | Storage | aggregated status and the Storage Health binary sensor |
@@ -153,6 +155,42 @@ The fan entities are unavailable while the controller is unsupported, for
 example when `framework_tool` is missing. Setting Mode to `auto` returns control
 to the EC immediately.
 
+### LED
+
+The RGB keyboard controller starts in `off` mode and writes nothing on startup.
+
+| Entity | Type | Source |
+|---|---|---|
+| Status | sensor (diagnostic) | `led.mode`, frame, support and last error |
+| Mode | select | `off`, `white` or `rainbow` via `/led/mode` |
+
+White is static for chassis inspection. Rainbow rotates the palette through all
+eight LEDs. The select is unavailable when `framework_tool` is missing or not
+usable. Shutdown turns the LEDs off.
+
+### Network
+
+Network auditing is enabled by default. It discovers listening ports, owning
+processes, systemd units and Docker/Podman containers automatically, and reads
+local firewall rules. All entities are diagnostic.
+
+| Entity | Unit | Source |
+|---|---|---|
+| Listening TCP | count | TCP sockets in `network.listening` (including IPv6) |
+| Listening UDP | count | unconnected UDP sockets in `network.listening` |
+| Listening Inventory | count | total listening sockets |
+| Firewall Rules | count | `network.firewall.rules` |
+| Firewall Backend | text | `network.firewall.backend` |
+
+The full inventory is in the `sockets` attribute of Listening Inventory, with
+protocol, address, port, PID, process, systemd unit, container, container ID and
+runtime where known. Firewall Rules carries accepting destination-port rules in
+its `allowed` attribute. Long inventories are capped at 100 attribute entries;
+the complete list remains available through `/network/stats`.
+
+No Nmap scan is run and no connection traffic is captured. See
+[REST API](api.md#get-networkstats).
+
 ### LLM requests
 
 Only present when `llm.enabled` is true. See
@@ -253,9 +291,9 @@ the Storage Health binary sensor.
 ## Dynamic entities
 
 Per-device SMART sensors appear when the first alert for that device is
-received, even if the device was not present at setup time. GPU, NPU, fan, LLM
-and per-drive NVMe entities are created on the first update that contains the
-corresponding block, without reloading the integration.
+received, even if the device was not present at setup time. GPU, NPU, fan, LLM,
+network, LED and per-drive NVMe entities are created on the first update that
+contains the corresponding block, without reloading the integration.
 
 ## Diagnostics
 
@@ -313,5 +351,11 @@ the IDs of its entities unless you disable that behaviour during the rename.
   `/healthz`.
 - Fan entities missing: they require `fan.enabled` and a working
   `framework_tool`. Check `monitors.fan` in `/healthz`.
+- Network entities missing: network auditing is enabled by default, so update
+  the daemon first. If it is explicitly disabled, no Network entities are
+  created. Check `monitors.network` in `/healthz`.
+- LED select unavailable: install `framework_tool` and run the daemon as root.
+  `monitors.led` reports `unsupported` when the tool is missing and `error` when
+  a write fails. Off is the default mode.
 
 See [Troubleshooting](troubleshooting.md) for daemon-side issues.

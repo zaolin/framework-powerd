@@ -4,6 +4,25 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 semantic versioning.
 
+## [1.10.0] - 2026-11-22
+
+### Fixed
+
+- A systemd boot ordering cycle with `power-profiles-daemon` deleted the
+  framework-powerd start job. The unit no longer orders after PPD, and the
+  initial power state is applied after `READY=1` with retries while PPD starts.
+
+### Added
+
+- Zero-configuration network audit. Listening TCP sockets and unconnected UDP
+  sockets are mapped to their owning process, systemd unit and Docker/Podman
+  container; local firewall rules are discovered automatically through
+  nftables, iptables or firewalld. Exposed through `/network/stats`, `/status`
+  and a Network sub-device in Home Assistant.
+- RGB keyboard LED control. Off by default, with static white for chassis
+  inspection and a moving rainbow effect through `framework_tool --rgbkbd`.
+  Includes `/led/stats`, `/led/mode` and an LED sub-device in Home Assistant.
+
 ## [1.9.1] - 2026-11-04
 
 ### Fixed

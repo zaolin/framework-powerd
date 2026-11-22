@@ -17,7 +17,7 @@ from homeassistant.helpers.update_coordinator import (
     UpdateFailed,
 )
 
-from .const import DOMAIN, CONF_NOTIFY_SERVICE, FAN_MODES, NPU_POWER_MODES
+from .const import DOMAIN, CONF_NOTIFY_SERVICE, FAN_MODES, LED_MODES, NPU_POWER_MODES
 
 SERVICE_SET_MODE = "set_mode"
 SERVICE_RESET_IDLE = "reset_idle"
@@ -245,6 +245,13 @@ class FrameworkPowerCoordinator(DataUpdateCoordinator):
         if mode not in FAN_MODES:
             raise HomeAssistantError(f"Unsupported fan mode: {mode}")
         await self._async_post("/fan/mode", {"mode": mode})
+        await self.async_request_refresh()
+
+    async def async_set_led_mode(self, mode: str) -> None:
+        """Set the RGB keyboard effect: off, white or rainbow."""
+        if mode not in LED_MODES:
+            raise HomeAssistantError(f"Unsupported LED mode: {mode}")
+        await self._async_post("/led/mode", {"mode": mode})
         await self.async_request_refresh()
 
     async def async_reset_idle(self) -> None:

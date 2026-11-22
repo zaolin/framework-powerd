@@ -74,6 +74,12 @@ async def async_setup_entry(
     def _fan_entities(coord):
         return build_fan_entities(coord)
 
+    def _network_entities(coord):
+        return build_network_entities(coord)
+
+    def _led_entities(coord):
+        return build_led_entities(coord)
+
     def _nvme_entities(coord):
         entities = []
         nvme = (coord.data or {}).get("nvme", {})
@@ -129,6 +135,16 @@ async def async_setup_entry(
             ]
         )
 
+    # Add the automatically discovered network inventory
+    network_data = coordinator.data.get("network", {})
+    if network_data:
+        entities.extend(_network_entities(coordinator))
+
+    # Add the RGB keyboard controller state
+    led_data = coordinator.data.get("led", {})
+    if led_data:
+        entities.extend(_led_entities(coordinator))
+
     # Add LLM request accounting sensors
     llm_data = coordinator.data.get("llm", {})
     if llm_data:
@@ -172,6 +188,12 @@ async def async_setup_entry(
     def _fan_sensors_factory(coord):
         return _fan_entities(coord)
 
+    def _network_sensors_factory(coord):
+        return _network_entities(coord)
+
+    def _led_sensors_factory(coord):
+        return _led_entities(coord)
+
     if not memory_data:
         coordinator.register_entity_factory(_memory_sensors_factory)
     if not gpu_data:
@@ -182,6 +204,10 @@ async def async_setup_entry(
         coordinator.register_entity_factory(_npu_sensors_factory)
     if not fan_data.get("enabled"):
         coordinator.register_entity_factory(_fan_sensors_factory)
+    if not network_data:
+        coordinator.register_entity_factory(_network_sensors_factory)
+    if not led_data:
+        coordinator.register_entity_factory(_led_sensors_factory)
     coordinator.register_entity_factory(_llm_sensors_factory, persistent=True)
 
     # A11: register a dynamic factory so per-device SMART alert entities appear
@@ -813,7 +839,11 @@ class NVMeMediaErrorsSensor(NVMeDeviceSensor):
 
     @property
     def icon(self):
-        return "mdi:alert-circle" if (self.native_value or 0) > 0 else "mdi:check-circle-outline"
+        return (
+            "mdi:alert-circle"
+            if (self.native_value or 0) > 0
+            else "mdi:check-circle-outline"
+        )
 
 
 class NVMeErrorLogSensor(NVMeDeviceSensor):
@@ -825,7 +855,11 @@ class NVMeErrorLogSensor(NVMeDeviceSensor):
 
     @property
     def icon(self):
-        return "mdi:file-alert" if (self.native_value or 0) > 0 else "mdi:file-document-outline"
+        return (
+            "mdi:file-alert"
+            if (self.native_value or 0) > 0
+            else "mdi:file-document-outline"
+        )
 
 
 class NVMeCriticalWarningSensor(NVMeDeviceSensor):
@@ -837,7 +871,11 @@ class NVMeCriticalWarningSensor(NVMeDeviceSensor):
 
     @property
     def icon(self):
-        return "mdi:alert-octagon" if (self.native_value or 0) > 0 else "mdi:check-circle-outline"
+        return (
+            "mdi:alert-octagon"
+            if (self.native_value or 0) > 0
+            else "mdi:check-circle-outline"
+        )
 
 
 class NVMeTemperatureSensor(NVMeDeviceSensor):
@@ -981,6 +1019,7 @@ class DaemonHealthSensor(FrameworkEntity, SensorEntity):
             "llm": monitors.get("llm"),
             "npu": monitors.get("npu"),
             "gpu": monitors.get("gpu"),
+            "network": monitors.get("network"),
             "llm_last_error": (self.coordinator.data.get("llm") or {}).get(
                 "last_error"
             ),
@@ -1172,6 +1211,7 @@ def build_npu_entities(coord):
 
 # Fan Control Sensors
 
+
 class FanSensorBase(FrameworkEntity, SensorEntity):
     """Base class for EC fan sensors."""
 
@@ -1269,6 +1309,196 @@ def build_fan_entities(coord):
         FanBoardTemperatureSensor(coord),
         FanCPUTemperatureSensor(coord),
     ]
+
+
+# Network Audit Sensors
+
+NETWORK_INVENTORY_LIMIT = 100
+
+
+class NetworkSensorBase(FrameworkEntity, SensorEntity):
+    """Base for the automatically discovered local network inventory."""
+
+    device_key = "network"
+    device_name = "Network"
+    device_model = "Network audit"
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+
+    @property
+    def available(self):
+        return self.coordinator.last_update_success and "network" in (self.coordinator.data or {})
+
+    @property
+    def _network(self):
+        return (self.coordinator.data or {}).get("network") or {}
+
+    @property
+    def _listening(self):
+        return self._network.get("listening") or []
+
+
+class NetworkListeningTCPSensor(NetworkSensorBase):
+    """Count listening TCP sockets, including IPv6."""
+
+    _attr_name = "Listening TCP"
+    _attr_unique_id = "network_listening_tcp"
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_icon = "mdi:lan-connect"
+
+    @property
+    def native_value(self):
+        return sum(
+            1 for s in self._listening if s.get("protocol", "").startswith("tcp")
+        )
+
+
+class NetworkListeningUDPSensor(NetworkSensorBase):
+    """Count bound, unconnected UDP sockets, including IPv6."""
+
+    _attr_name = "Listening UDP"
+    _attr_unique_id = "network_listening_udp"
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_icon = "mdi:lan-connect"
+
+    @property
+    def native_value(self):
+        return sum(
+            1 for s in self._listening if s.get("protocol", "").startswith("udp")
+        )
+
+
+class NetworkInventorySensor(NetworkSensorBase):
+    """Full port-to-process/service/container inventory as attributes."""
+
+    _attr_name = "Listening Inventory"
+    _attr_unique_id = "network_listening_inventory"
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_icon = "mdi:lan"
+
+    @property
+    def native_value(self):
+        return len(self._listening)
+
+    @property
+    def extra_state_attributes(self):
+        listening = self._listening
+        sockets = []
+        for item in listening[:NETWORK_INVENTORY_LIMIT]:
+            sockets.append(
+                {
+                    key: item[key]
+                    for key in (
+                        "protocol",
+                        "address",
+                        "port",
+                        "pid",
+                        "process",
+                        "unit",
+                        "container",
+                        "container_id",
+                        "runtime",
+                    )
+                    if item.get(key) not in (None, "", 0)
+                }
+            )
+        return {
+            "sockets": sockets,
+            "truncated": len(listening) > NETWORK_INVENTORY_LIMIT,
+            "last_update": self._network.get("last_update"),
+            "last_error": self._network.get("last_error"),
+        }
+
+
+class NetworkFirewallRulesSensor(NetworkSensorBase):
+    """Number of rules in the detected local firewall backend."""
+
+    _attr_name = "Firewall Rules"
+    _attr_unique_id = "network_firewall_rules"
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_icon = "mdi:shield-lock"
+
+    @property
+    def native_value(self):
+        return (self._network.get("firewall") or {}).get("rules", 0)
+
+    @property
+    def extra_state_attributes(self):
+        firewall = self._network.get("firewall") or {}
+        allowed = firewall.get("allowed") or []
+        return {
+            "allowed": allowed[:NETWORK_INVENTORY_LIMIT],
+            "truncated": len(allowed) > NETWORK_INVENTORY_LIMIT,
+            "error": firewall.get("error"),
+        }
+
+
+class NetworkFirewallBackendSensor(NetworkSensorBase):
+    """Detected firewall backend: nftables, iptables, firewalld or unsupported."""
+
+    _attr_name = "Firewall Backend"
+    _attr_unique_id = "network_firewall_backend"
+    _attr_icon = "mdi:shield-outline"
+
+    @property
+    def native_value(self):
+        return (self._network.get("firewall") or {}).get("backend")
+
+
+def build_network_entities(coord):
+    """Return network inventory sensors when the daemon supplies the block."""
+    if not (coord.data or {}).get("network"):
+        return []
+    return [
+        NetworkListeningTCPSensor(coord),
+        NetworkListeningUDPSensor(coord),
+        NetworkInventorySensor(coord),
+        NetworkFirewallRulesSensor(coord),
+        NetworkFirewallBackendSensor(coord),
+    ]
+
+
+# RGB Keyboard LED Sensors
+
+
+class LedStatusSensor(FrameworkEntity, SensorEntity):
+    """Current RGB keyboard effect and controller health."""
+
+    device_key = "led"
+    device_name = "LED"
+    device_model = "RGB keyboard"
+    _attr_name = "Status"
+    _attr_unique_id = "led_status"
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+    _attr_icon = "mdi:led-strip"
+
+    @property
+    def _led(self):
+        return (self.coordinator.data or {}).get("led") or {}
+
+    @property
+    def available(self):
+        return self.coordinator.last_update_success and "led" in (self.coordinator.data or {})
+
+    @property
+    def native_value(self):
+        return self._led.get("mode")
+
+    @property
+    def extra_state_attributes(self):
+        return {
+            "supported": self._led.get("supported"),
+            "frame": self._led.get("frame"),
+            "frame_interval_ms": self._led.get("frame_interval_ms"),
+            "last_update": self._led.get("last_update"),
+            "last_error": self._led.get("last_error"),
+        }
+
+
+def build_led_entities(coord):
+    """Return the RGB keyboard status entity when the daemon supplies it."""
+    if not (coord.data or {}).get("led"):
+        return []
+    return [LedStatusSensor(coord)]
 
 
 # LLM Request Accounting Sensors

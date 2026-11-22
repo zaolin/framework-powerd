@@ -275,3 +275,35 @@ change was rejected; after two read failures the daemon tries to return the fan
 to the EC, but a failed `--autofanctrl` is retried on the next poll. To reset
 manual control by hand, run `framework_tool --autofanctrl`. See
 [EC Fan Control](fan.md).
+
+## Network audit shows no firewall rules or container names
+
+- Network auditing is enabled by default. If it was explicitly disabled with
+  `network_audit.enabled: false`, the `/network/stats` endpoint returns 404 and
+  no Network entities are created.
+- A firewall backend of `unsupported` means none of `nft`, `iptables` and
+  `firewall-cmd` was found in the unit's `PATH`. Port inventory still works.
+  Install one of them to add rule reporting.
+- A backend of `error` means the detected tool could not read the ruleset. Run
+  `nft --json list ruleset` or `iptables -S` as root and compare the error.
+- Missing Docker/Podman names mean the runtime Unix socket is unavailable or
+  the container exited. The daemon uses `/run/docker.sock` and
+  `/run/podman/podman.sock`; the shipped unit runs as root. The container ID
+  remains visible even when the name cannot be resolved.
+- A missing process or systemd unit means the socket owner exited between
+  reading `/proc/net` and `/proc/<pid>/fd`, or procfs access was denied. The
+  port and address remain in the inventory.
+
+## LED animation does not start
+
+- Off is the default mode; select `white` or `rainbow` through Home Assistant or
+  `POST /led/mode`.
+- `monitors.led` of `unsupported` means `framework_tool` is missing from the
+  unit's `PATH`. Install it and restart the daemon.
+- `monitors.led` of `error` means the write failed. The daemon must run as root;
+  `framework_tool` can also fail when the machine has no RGB keyboard. Failed
+  default-driver writes are retried with `--driver cros-ec`; a failed mode change
+  keeps the previous mode and reports `error`.
+- Static white and off write once on the mode change. Rainbow writes the next
+  frame every `led.frame_interval` (default 250 ms). A failed frame is retried on
+  the next interval.

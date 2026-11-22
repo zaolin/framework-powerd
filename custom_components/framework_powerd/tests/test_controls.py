@@ -218,3 +218,36 @@ class TestControlDeviceGrouping:
         assert info["name"] == "Fan"
         assert ("framework_powerd", "localhost:8080:fan") in info["identifiers"]
         assert info["via_device"] == ("framework_powerd", "localhost:8080")
+
+
+class TestLedModeSelect:
+    def test_options_and_current(self, mock_coordinator):
+        from custom_components.framework_powerd.select import FrameworkPowerLedModeSelect
+
+        entity = FrameworkPowerLedModeSelect(mock_coordinator)
+        assert entity.options == ["off", "white", "rainbow"]
+        assert entity.current_option == "rainbow"
+        assert entity.available is True
+
+    def test_unsupported_controller_is_unavailable(self, mock_coordinator):
+        from custom_components.framework_powerd.select import FrameworkPowerLedModeSelect
+
+        mock_coordinator.data["led"]["supported"] = False
+        assert FrameworkPowerLedModeSelect(mock_coordinator).available is False
+
+    def test_device(self, mock_coordinator):
+        from custom_components.framework_powerd.select import FrameworkPowerLedModeSelect
+
+        info = FrameworkPowerLedModeSelect(mock_coordinator).device_info
+        assert info["name"] == "LED"
+        assert info["model"] == "RGB keyboard"
+        assert ("framework_powerd", "localhost:8080:led") in info["identifiers"]
+        assert info["via_device"] == ("framework_powerd", "localhost:8080")
+
+    def test_select_option_calls_coordinator(self, mock_coordinator):
+        from custom_components.framework_powerd.select import FrameworkPowerLedModeSelect
+
+        mock_coordinator.async_set_led_mode = AsyncMock()
+        entity = FrameworkPowerLedModeSelect(mock_coordinator)
+        asyncio.run(entity.async_select_option("white"))
+        mock_coordinator.async_set_led_mode.assert_awaited_once_with("white")
