@@ -96,11 +96,20 @@ func TestRainbowFramesMove(t *testing.T) {
 
 	controller.writeNextFrame(context.Background())
 	second := runner.calls[1][2:]
+	if second[0] != "0xff1000" {
+		t.Errorf("frame 1 color 0 = %q, want interpolated 0xff1000", second[0])
+	}
 	for i := range rainbowPalette {
-		want := rainbowPalette[(i+1)%len(rainbowPalette)]
+		want := interpolateColor(rainbowPalette[i], rainbowPalette[(i+1)%len(rainbowPalette)], 1.0/rainbowSubsteps)
 		if second[i] != want {
 			t.Errorf("frame 1 color %d = %q, want %q", i, second[i], want)
 		}
+	}
+	if half := frameColors(rainbowSubsteps / 2); half[0] != "0xff4000" {
+		t.Errorf("half step = %q, want 0xff4000", half[0])
+	}
+	if wrapped := frameColors(rainbowFrames); wrapped[0] != rainbowPalette[0] {
+		t.Errorf("wrapped frame = %q, want %q", wrapped[0], rainbowPalette[0])
 	}
 	if controller.GetStats().LastUpdate.IsZero() {
 		t.Error("last_update must be set after a successful frame")

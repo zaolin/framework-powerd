@@ -32,7 +32,7 @@ curl http://localhost:8080/healthz
 ```json
 {
   "status": "ok",
-  "version": "1.10.0",
+  "version": "1.11.0",
   "uptime_seconds": 12345.6,
   "is_idle": false,
   "power_sample_age_seconds": 1.2,
@@ -165,7 +165,7 @@ Full daemon state. Requires auth.
     "cpu_model": "AMD Ryzen AI 7 350 w/ Radeon 860M",
     "cpu_count": 16,
     "total_ram_bytes": 50010562560,
-    "daemon_version": "1.10.0"
+    "daemon_version": "1.11.0"
   }
 }
 ```
@@ -439,7 +439,7 @@ Returns the RGB keyboard controller state. Requires auth.
   "supported": true,
   "driver": "cros-ec",
   "frame": 3,
-  "frame_interval_ms": 250,
+  "frame_interval_ms": 50,
   "last_update": "2026-11-22T12:00:00Z"
 }
 ```
@@ -461,8 +461,7 @@ curl -X POST http://localhost:8080/led/mode \
   -d '{"mode":"rainbow"}'
 ```
 
-Accepted values are `off`, `white` and `rainbow`. White is a static inspection
-mode; rainbow moves the palette through all eight LEDs. Off performs no startup
+Accepted values are `off`, `white` and `rainbow`. White is a static inspection mode; rainbow interpolates RGB values between the eight palette colors so movement is smooth rather than stepped. Off performs no startup
 writes and shutdown turns the LEDs off. A missing `framework_tool` returns 400.
 
 ## Errors

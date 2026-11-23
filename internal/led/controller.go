@@ -3,7 +3,9 @@ package led
 import (
 	"context"
 	"fmt"
+	"math"
 	"os/exec"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -25,7 +27,13 @@ var rainbowPalette = []string{
 const (
 	black = "0x000000"
 	white = "0xffffff"
+
+	// Interpolate eight substeps between each pair of palette colors. With the
+	// 50 ms default this gives a 3.2 s cycle and visibly smooth movement.
+	rainbowSubsteps = 8
 )
+
+var rainbowFrames = rainbowSubsteps * len(rainbowPalette)
 
 // CommandRunner executes framework_tool and reports availability.
 type CommandRunner interface {
@@ -268,7 +276,7 @@ func (c *Controller) writeNextFrame(ctx context.Context) {
 	}
 
 	c.mu.RLock()
-	next := (c.stats.Frame + 1) % len(rainbowPalette)
+	next := (c.stats.Frame + 1) % rainbowFrames
 	c.mu.RUnlock()
 	if err := c.writeColorsLocked(ctx, frameColors(next)); err == nil {
 		c.mu.Lock()
@@ -283,10 +291,38 @@ func (c *Controller) writeFrame(ctx context.Context, frame int) error {
 
 func frameColors(frame int) []string {
 	colors := make([]string, len(rainbowPalette))
+	phase := float64(frame%rainbowFrames) / rainbowSubsteps
 	for i := range colors {
-		colors[i] = rainbowPalette[(i+frame)%len(rainbowPalette)]
+		position := phase + float64(i)
+		base := int(math.Floor(position)) % len(rainbowPalette)
+		next := (base + 1) % len(rainbowPalette)
+		blend := position - math.Floor(position)
+		colors[i] = interpolateColor(rainbowPalette[base], rainbowPalette[next], blend)
 	}
 	return colors
+}
+
+func interpolateColor(from, to string, blend float64) string {
+	if blend <= 0 {
+		return strings.ToLower(from)
+	}
+	if blend >= 1 {
+		return strings.ToLower(to)
+	}
+	fromR, fromG, fromB := parseColor(from)
+	toR, toG, toB := parseColor(to)
+	r := uint8(math.Round(float64(fromR) + (float64(toR)-float64(fromR))*blend))
+	g := uint8(math.Round(float64(fromG) + (float64(toG)-float64(fromG))*blend))
+	b := uint8(math.Round(float64(fromB) + (float64(toB)-float64(fromB))*blend))
+	return fmt.Sprintf("0x%02x%02x%02x", r, g, b)
+}
+
+func parseColor(value string) (uint8, uint8, uint8) {
+	number, err := strconv.ParseUint(strings.TrimPrefix(strings.ToLower(value), "0x"), 16, 32)
+	if err != nil {
+		return 0, 0, 0
+	}
+	return uint8(number >> 16), uint8(number >> 8), uint8(number)
 }
 
 func (c *Controller) writeColors(ctx context.Context, colors []string) error {

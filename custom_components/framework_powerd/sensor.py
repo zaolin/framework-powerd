@@ -1,4 +1,6 @@
 """Sensor platform for Framework Power Daemon."""
+import hashlib
+import re
 
 from homeassistant.components.sensor import (
     SensorDeviceClass,
@@ -77,6 +79,11 @@ async def async_setup_entry(
     def _network_entities(coord):
         return build_network_entities(coord)
 
+    _network_services_registered: set[str] = set()
+
+    def _network_service_entities(coord):
+        return build_network_service_entities(coord, _network_services_registered)
+
     def _led_entities(coord):
         return build_led_entities(coord)
 
@@ -139,6 +146,7 @@ async def async_setup_entry(
     network_data = coordinator.data.get("network", {})
     if network_data:
         entities.extend(_network_entities(coordinator))
+        entities.extend(_network_service_entities(coordinator))
 
     # Add the RGB keyboard controller state
     led_data = coordinator.data.get("led", {})
@@ -191,6 +199,9 @@ async def async_setup_entry(
     def _network_sensors_factory(coord):
         return _network_entities(coord)
 
+    def _network_service_sensors_factory(coord):
+        return _network_service_entities(coord)
+
     def _led_sensors_factory(coord):
         return _led_entities(coord)
 
@@ -206,6 +217,7 @@ async def async_setup_entry(
         coordinator.register_entity_factory(_fan_sensors_factory)
     if not network_data:
         coordinator.register_entity_factory(_network_sensors_factory)
+    coordinator.register_entity_factory(_network_service_sensors_factory, persistent=True)
     if not led_data:
         coordinator.register_entity_factory(_led_sensors_factory)
     coordinator.register_entity_factory(_llm_sensors_factory, persistent=True)
@@ -1314,6 +1326,49 @@ def build_fan_entities(coord):
 # Network Audit Sensors
 
 NETWORK_INVENTORY_LIMIT = 100
+NETWORK_SERVICE_LIMIT = 50
+
+
+def _network_service_key(socket):
+    """Stable grouping key: container, then systemd unit, then process."""
+    container = socket.get("container_id") or socket.get("container")
+    if container:
+        return f"container:{str(container)[:12]}"
+    if socket.get("unit"):
+        return f"unit:{socket['unit']}"
+    if socket.get("process"):
+        return f"process:{socket['process']}"
+    if socket.get("pid"):
+        return f"pid:{socket['pid']}"
+    return "unknown"
+
+
+def _network_service_name(socket):
+    container = socket.get("container")
+    if container:
+        return container
+    if socket.get("container_id"):
+        return str(socket["container_id"])[:12]
+    return socket.get("unit") or socket.get("process") or "unknown"
+
+
+def group_network_services(listening):
+    """Group listening sockets into stable service buckets."""
+    groups = {}
+    order = []
+    for socket in listening:
+        key = _network_service_key(socket)
+        if key not in groups:
+            groups[key] = {"key": key, "name": _network_service_name(socket), "sockets": []}
+            order.append(key)
+        groups[key]["sockets"].append(socket)
+    return [groups[key] for key in order]
+
+
+def _service_unique_id(key):
+    slug = re.sub(r"[^a-z0-9]+", "_", key.lower()).strip("_")[:40] or "unknown"
+    digest = hashlib.sha256(key.encode()).hexdigest()[:8]
+    return f"network_service_{slug}_{digest}"
 
 
 class NetworkSensorBase(FrameworkEntity, SensorEntity):
@@ -1409,6 +1464,71 @@ class NetworkInventorySensor(NetworkSensorBase):
         }
 
 
+class NetworkServiceSensor(NetworkSensorBase):
+    """Ports and owner details for one service, unit or container."""
+
+    _attr_entity_category = None
+    _attr_icon = "mdi:server-network"
+
+    def __init__(self, coordinator, key):
+        super().__init__(coordinator)
+        self._key = key
+        sockets = self._sockets
+        name = sockets[0] if sockets else None
+        display = _network_service_name(name) if name else "unknown"
+        self._attr_name = f"Service {display}"
+        self._attr_unique_id = _service_unique_id(key)
+
+    @property
+    def _sockets(self):
+        return [s for s in self._listening if _network_service_key(s) == self._key]
+
+    @property
+    def available(self):
+        return super().available and bool(self._sockets)
+
+    @property
+    def native_value(self):
+        sockets = self._sockets
+        if not sockets:
+            return None
+        distinct = {
+            (socket.get("port"), str(socket.get("protocol", "")).removesuffix("6"))
+            for socket in sockets
+        }
+        if len(distinct) == 1:
+            port, protocol = next(iter(distinct))
+            return f"{port}/{protocol}"
+        return f"{len(distinct)} ports"
+
+    @property
+    def extra_state_attributes(self):
+        sockets = self._sockets[:NETWORK_INVENTORY_LIMIT]
+        ports = []
+        for socket in sockets:
+            ports.append({
+                "protocol": socket.get("protocol"),
+                "address": socket.get("address"),
+                "port": socket.get("port"),
+            })
+        ports = sorted(ports, key=lambda item: (item["port"] or 0, item["protocol"] or ""))
+        first = sockets[0] if sockets else {}
+        return {
+            "service": _network_service_name(first) if first else None,
+            "ports": ports,
+            "addresses": sorted({s.get("address") for s in sockets if s.get("address")}),
+            "pids": sorted({s.get("pid") for s in sockets if s.get("pid")}),
+            "processes": sorted({s.get("process") for s in sockets if s.get("process")}),
+            "unit": first.get("unit"),
+            "container": first.get("container"),
+            "container_id": first.get("container_id"),
+            "runtime": first.get("runtime"),
+            "socket_count": len(self._sockets),
+            "truncated": len(self._sockets) > NETWORK_INVENTORY_LIMIT,
+            "last_error": self._network.get("last_error"),
+        }
+
+
 class NetworkFirewallRulesSensor(NetworkSensorBase):
     """Number of rules in the detected local firewall backend."""
 
@@ -1445,7 +1565,7 @@ class NetworkFirewallBackendSensor(NetworkSensorBase):
 
 
 def build_network_entities(coord):
-    """Return network inventory sensors when the daemon supplies the block."""
+    """Return aggregate network sensors when the daemon supplies the block."""
     if not (coord.data or {}).get("network"):
         return []
     return [
@@ -1455,6 +1575,21 @@ def build_network_entities(coord):
         NetworkFirewallRulesSensor(coord),
         NetworkFirewallBackendSensor(coord),
     ]
+
+
+def build_network_service_entities(coord, registered):
+    """Return newly discovered service entities, up to the safety limit."""
+    network = (coord.data or {}).get("network") or {}
+    groups = group_network_services(network.get("listening") or [])
+    entities = []
+    for group in groups:
+        if group["key"] in registered:
+            continue
+        if len(registered) >= NETWORK_SERVICE_LIMIT:
+            break
+        registered.add(group["key"])
+        entities.append(NetworkServiceSensor(coord, group["key"]))
+    return entities
 
 
 # RGB Keyboard LED Sensors

@@ -142,9 +142,10 @@ Only the secondary tunables (PCIe ASPM, powertop, USB/audio latency) change.
   5 s) and applies the duty curve with hysteresis and a fall step. The daemon
   returns the fan to the EC on graceful shutdown; the systemd `ExecStopPost`
   hook covers crashes and watchdog kills.
-- **LED controller** writes static white/off states on mode changes and rotates
-  the rainbow palette every `led.frame_interval` (default 250 ms). Shutdown turns
-  the LEDs off. Missing `framework_tool` is unsupported, not a daemon failure.
+- **LED controller** writes static white/off states on mode changes and
+  interpolates RGB values between the rainbow palette colors every
+  `led.frame_interval` (default 50 ms). Shutdown turns the LEDs off. Missing
+  `framework_tool` is unsupported, not a daemon failure.
 - **Network audit** inventories listening sockets and local firewall rules every
   `network_audit.poll_interval` (default 30 s). Socket inodes map to PIDs,
   systemd units and Docker/Podman containers; firewall backend detection prefers

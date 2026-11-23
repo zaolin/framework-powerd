@@ -1366,3 +1366,92 @@ class TestLedStatusSensor:
         assert len(build_led_entities(mock_coordinator)) == 1
         del mock_coordinator.data["led"]
         assert build_led_entities(mock_coordinator) == []
+
+
+class TestNetworkServiceSensors:
+    """Services are exposed as individual, readable entities."""
+
+    def test_grouping(self, mock_coordinator):
+        from custom_components.framework_powerd.sensor import group_network_services
+
+        groups = group_network_services(mock_coordinator.data["network"]["listening"])
+        assert len(groups) == 3
+        names = {group["name"] for group in groups}
+        assert names == {"ssh.service", "llama", "systemd-resolved.service"}
+
+    def test_systemd_service_ports(self, mock_coordinator):
+        from custom_components.framework_powerd.sensor import NetworkServiceSensor
+
+        sensor = NetworkServiceSensor(mock_coordinator, "unit:ssh.service")
+        assert sensor.native_value == "22/tcp"
+        attrs = sensor.extra_state_attributes
+        assert attrs["unit"] == "ssh.service"
+        assert attrs["ports"][0] == {"protocol": "tcp", "address": "0.0.0.0", "port": 22}
+
+    def test_multiple_ports_are_grouped(self, mock_coordinator):
+        from custom_components.framework_powerd.sensor import NetworkServiceSensor
+
+        mock_coordinator.data["network"]["listening"].append(
+            {"protocol": "tcp", "address": "127.0.0.1", "port": 2222,
+             "pid": 4242, "process": "sshd", "unit": "ssh.service"}
+        )
+        sensor = NetworkServiceSensor(mock_coordinator, "unit:ssh.service")
+        assert sensor.native_value == "2 ports"
+        assert [p["port"] for p in sensor.extra_state_attributes["ports"]] == [22, 2222]
+
+    def test_container_short_and_full_ids_group_together(self, mock_coordinator):
+        from custom_components.framework_powerd.sensor import _network_service_key
+
+        short = {"container_id": "0123456789ab", "container": "llama"}
+        full = {"container_id": "0123456789abcdef" * 4, "container": "llama"}
+        assert _network_service_key(short) == _network_service_key(full)
+
+    def test_same_port_on_multiple_addresses(self, mock_coordinator):
+        from custom_components.framework_powerd.sensor import NetworkServiceSensor
+
+        mock_coordinator.data["network"]["listening"].append(
+            {"protocol": "tcp", "address": "127.0.0.1", "port": 22,
+             "pid": 4242, "process": "sshd", "unit": "ssh.service"}
+        )
+        sensor = NetworkServiceSensor(mock_coordinator, "unit:ssh.service")
+        assert sensor.native_value == "22/tcp"
+        attrs = sensor.extra_state_attributes
+        assert attrs["socket_count"] == 2
+        assert len(attrs["ports"]) == 2
+        assert attrs["last_error"] is None
+
+    def test_container_service(self, mock_coordinator):
+        from custom_components.framework_powerd.sensor import NetworkServiceSensor
+
+        sensor = NetworkServiceSensor(mock_coordinator, "container:0123456789ab")
+        assert sensor.native_value == "18081/tcp"
+        attrs = sensor.extra_state_attributes
+        assert attrs["container"] == "llama"
+        assert attrs["runtime"] == "docker"
+
+    def test_service_becomes_unavailable(self, mock_coordinator):
+        from custom_components.framework_powerd.sensor import NetworkServiceSensor
+
+        sensor = NetworkServiceSensor(mock_coordinator, "unit:ssh.service")
+        assert sensor.available is True
+        mock_coordinator.data["network"]["listening"] = [
+            socket for socket in mock_coordinator.data["network"]["listening"]
+            if socket.get("unit") != "ssh.service"
+        ]
+        assert sensor.available is False
+
+    def test_service_limit(self, mock_coordinator):
+        from custom_components.framework_powerd.sensor import (
+            NETWORK_SERVICE_LIMIT,
+            build_network_service_entities,
+        )
+
+        mock_coordinator.data["network"]["listening"] = [
+            {"protocol": "tcp", "address": "127.0.0.1", "port": 20000 + i,
+             "process": f"service{i}"}
+            for i in range(NETWORK_SERVICE_LIMIT + 5)
+        ]
+        registered = set()
+        entities = build_network_service_entities(mock_coordinator, registered)
+        assert len(entities) == NETWORK_SERVICE_LIMIT
+        assert len(registered) == NETWORK_SERVICE_LIMIT

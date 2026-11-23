@@ -164,15 +164,17 @@ The RGB keyboard controller starts in `off` mode and writes nothing on startup.
 | Status | sensor (diagnostic) | `led.mode`, frame, support and last error |
 | Mode | select | `off`, `white` or `rainbow` via `/led/mode` |
 
-White is static for chassis inspection. Rainbow rotates the palette through all
-eight LEDs. The select is unavailable when `framework_tool` is missing or not
-usable. Shutdown turns the LEDs off.
+White is static for chassis inspection. Rainbow smoothly interpolates RGB
+values between the eight palette colors, with a 50 ms default frame interval.
+The select is unavailable when `framework_tool` is missing or not usable.
+Shutdown turns the LEDs off.
 
 ### Network
 
 Network auditing is enabled by default. It discovers listening ports, owning
 processes, systemd units and Docker/Podman containers automatically, and reads
-local firewall rules. All entities are diagnostic.
+local firewall rules. Aggregate inventory entities are diagnostic; the
+per-service entities are normal so they are visible in dashboards.
 
 | Entity | Unit | Source |
 |---|---|---|
@@ -187,6 +189,27 @@ protocol, address, port, PID, process, systemd unit, container, container ID and
 runtime where known. Firewall Rules carries accepting destination-port rules in
 its `allowed` attribute. Long inventories are capped at 100 attribute entries;
 the complete list remains available through `/network/stats`.
+
+Each service also gets a normal **Service `<name>`** entity on the Network
+device, grouped by container first, then systemd unit, then process. A single
+port is the state (`22/tcp`); multiple ports show `N ports`. Attributes contain
+the port list, addresses, PIDs, processes, unit, container, runtime and last
+error. New services appear dynamically; a service that disappears becomes
+unavailable. At most 50 service entities are created, while the complete
+inventory remains in Listening Inventory and `/network/stats`.
+
+Dashboard example for the full list:
+
+```yaml
+type: markdown
+title: Listening services
+content: |
+  {% set sockets = state_attr('sensor.network_listening_inventory', 'sockets') or [] %}
+  {% for s in sockets %}
+  **{{ s.container or s.unit or s.process or 'unknown' }}**
+  {{ s.port }}/{{ s.protocol }} on {{ s.address }}
+  {% endfor %}
+```
 
 No Nmap scan is run and no connection traffic is captured. See
 [REST API](api.md#get-networkstats).

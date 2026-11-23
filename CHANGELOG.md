@@ -4,6 +4,22 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 semantic versioning.
 
+## [1.11.0] - 2026-11-23
+
+### Added
+
+- Per-service Network sensors in Home Assistant. Each container, systemd unit
+  or process gets a normal entity with protocol/port state and address, PID,
+  unit, container, runtime and full port-list attributes. Up to 50 dynamic
+  service entities are created; the complete inventory stays in Listening
+  Inventory and `/network/stats`.
+
+### Changed
+
+- Rainbow RGB keyboard animation now interpolates between palette colors with
+  a 50 ms default frame interval instead of stepping through eight discrete
+  colors every 250 ms.
+
 ## [1.10.0] - 2026-11-22
 
 ### Fixed

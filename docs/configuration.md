@@ -157,10 +157,9 @@ are independent of the fan curve and off by default.
 | Key | Type | Default | Description |
 |---|---|---|---|
 | `mode` | string | `off` | `off`, `white` for chassis inspection, or `rainbow` for the moving effect. |
-| `frame_interval` | duration | `250ms` | Rainbow frame interval, 100 ms–5 s. |
+| `frame_interval` | duration | `50ms` | Rainbow frame interval, 25 ms–5 s. |
 
-Off performs no writes on startup. White and rainbow can also be selected at
-runtime through `/led/mode`. Shutdown stops the animation and turns the LEDs off.
+Rainbow interpolates RGB values between the eight palette colors, so movement is smooth rather than stepped. Off performs no writes on startup. White and rainbow can also be selected at runtime through `/led/mode`. Shutdown stops the animation and turns the LEDs off.
 
 ### `network_audit`
 
@@ -232,7 +231,7 @@ whenever it is set.
   is 0–125; `hysteresis_c` is 0–30; `poll_interval` must be at least 1 s.
 - `network_audit.poll_interval` must be at least 1 s when set.
 - `led.mode` must be `off`, `white` or `rainbow`; `led.frame_interval` must be
-  between 100 ms and 5 s when set.
+  between 25 ms and 5 s when set.
 - `llm.access_log` must be set and `counted_paths` must not be empty when LLM
   accounting is enabled; `history_days` must not be negative; group names must
   be non-empty and unique (case-insensitive); group CIDRs must be valid CIDRs
@@ -293,7 +292,7 @@ whenever it is set.
   },
   "led": {
     "mode": "off",
-    "frame_interval": "250ms"
+    "frame_interval": "50ms"
   },
   "network_audit": {
     "enabled": true,

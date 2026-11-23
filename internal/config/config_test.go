@@ -767,8 +767,8 @@ func TestLEDConfig_Defaults(t *testing.T) {
 	if cfg.Mode != "off" {
 		t.Errorf("mode = %q, want off", cfg.Mode)
 	}
-	if got := cfg.GetFrameInterval(); got != 250*time.Millisecond {
-		t.Errorf("frame interval = %v, want 250ms", got)
+	if got := cfg.GetFrameInterval(); got != 50*time.Millisecond {
+		t.Errorf("frame interval = %v, want 50ms", got)
 	}
 }
 
@@ -779,9 +779,9 @@ func TestLEDConfig_Validate(t *testing.T) {
 	}
 
 	valid.Mode = "rainbow"
-	valid.FrameInterval = "100ms"
+	valid.FrameInterval = "25ms"
 	if err := valid.Validate(); err != nil {
-		t.Errorf("100ms must be accepted: %v", err)
+		t.Errorf("25ms must be accepted: %v", err)
 	}
 
 	invalid := valid
@@ -791,9 +791,9 @@ func TestLEDConfig_Validate(t *testing.T) {
 	}
 
 	invalid = valid
-	invalid.FrameInterval = "50ms"
+	invalid.FrameInterval = "10ms"
 	if err := invalid.Validate(); err == nil {
-		t.Error("frame interval below 100ms must fail")
+		t.Error("frame interval below 25ms must fail")
 	}
 
 	invalid = valid

@@ -304,6 +304,6 @@ manual control by hand, run `framework_tool --autofanctrl`. See
   `framework_tool` can also fail when the machine has no RGB keyboard. Failed
   default-driver writes are retried with `--driver cros-ec`; a failed mode change
   keeps the previous mode and reports `error`.
-- Static white and off write once on the mode change. Rainbow writes the next
-  frame every `led.frame_interval` (default 250 ms). A failed frame is retried on
-  the next interval.
+- Static white and off write once on the mode change. Rainbow interpolates RGB
+  values and writes the next frame every `led.frame_interval` (default 50 ms). A
+  failed frame is retried on the next interval.

@@ -248,8 +248,8 @@ type LEDConfig struct {
 // GetFrameInterval parses the rainbow frame interval.
 func (l *LEDConfig) GetFrameInterval() time.Duration {
 	d, err := time.ParseDuration(l.FrameInterval)
-	if err != nil || d < 100*time.Millisecond || d > 5*time.Second {
-		return 250 * time.Millisecond
+	if err != nil || d < 25*time.Millisecond || d > 5*time.Second {
+		return 50 * time.Millisecond
 	}
 	return d
 }
@@ -266,8 +266,8 @@ func (l *LEDConfig) Validate() error {
 		if err != nil {
 			return fmt.Errorf("led.frame_interval %q is not a valid duration: %w", l.FrameInterval, err)
 		}
-		if d < 100*time.Millisecond || d > 5*time.Second {
-			return fmt.Errorf("led.frame_interval must be between 100ms and 5s, got %q", l.FrameInterval)
+		if d < 25*time.Millisecond || d > 5*time.Second {
+			return fmt.Errorf("led.frame_interval must be between 25ms and 5s, got %q", l.FrameInterval)
 		}
 	}
 	return nil
@@ -599,7 +599,7 @@ func DefaultConfig() *Config {
 		},
 		LED: LEDConfig{
 			Mode:          "off",
-			FrameInterval: "250ms",
+			FrameInterval: "50ms",
 		},
 		Fan: FanConfig{
 			Enabled:            false,
